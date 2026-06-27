@@ -1,0 +1,66 @@
+{
+  "name": "@aegiskit/scanner",
+  "version": "0.1.0",
+  "description": "Static analysis engine that finds the security gaps a runtime library can't fix — grounded in real vibe-coded Next.js/Supabase mistakes.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "typescript": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "fast-check": "catalog:",
+    "tsup": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "keywords": [
+    "security",
+    "sast",
+    "static-analysis",
+    "taint-analysis",
+    "nextjs",
+    "supabase",
+    "rls",
+    "idor",
+    "owasp",
+    "appsec"
+  ],
+  "author": "tomodahinata",
+  "homepage": "https://github.com/tomodahinata/aegis/tree/main/packages/scanner#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomodahinata/aegis.git",
+    "directory": "packages/scanner"
+  },
+  "bugs": "https://github.com/tomodahinata/aegis/issues",
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
+  }
+}

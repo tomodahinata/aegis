@@ -1,0 +1,63 @@
+{
+  "name": "aegis",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Aegis — a drop-in, defense-in-depth security toolkit for Next.js/Supabase SaaS apps.",
+  "packageManager": "pnpm@10.18.3",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "preinstall": "npx only-allow pnpm",
+    "prepare": "lefthook install",
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "fix": "biome check --write .",
+    "verify": "pnpm build && pnpm typecheck && pnpm test && pnpm lint",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "turbo run build && changeset publish"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.1",
+    "@changesets/cli": "^2.31.0",
+    "@commitlint/cli": "^21.1.0",
+    "@commitlint/config-conventional": "^21.1.0",
+    "lefthook": "^2.1.9",
+    "turbo": "^2.10.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "lefthook"
+    ]
+  },
+  "license": "MIT",
+  "author": "tomodahinata",
+  "homepage": "https://github.com/tomodahinata/aegis#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomodahinata/aegis.git"
+  },
+  "bugs": "https://github.com/tomodahinata/aegis/issues",
+  "keywords": [
+    "security",
+    "nextjs",
+    "supabase",
+    "appsec",
+    "sast",
+    "dast",
+    "csp",
+    "rate-limiting",
+    "owasp"
+  ]
+}

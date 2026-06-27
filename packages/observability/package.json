@@ -1,0 +1,62 @@
+{
+  "name": "@aegiskit/observability",
+  "version": "0.1.0",
+  "description": "Aegis observability: a pluggable EventStore, deterministic posture scoring, and ingestion signature verification for the security dashboard.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aegiskit/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "fast-check": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "keywords": [
+    "security",
+    "observability",
+    "security-posture",
+    "audit-events",
+    "appsec"
+  ],
+  "author": "tomodahinata",
+  "homepage": "https://github.com/tomodahinata/aegis/tree/main/packages/observability#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomodahinata/aegis.git",
+    "directory": "packages/observability"
+  },
+  "bugs": "https://github.com/tomodahinata/aegis/issues",
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
+  }
+}

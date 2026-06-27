@@ -1,0 +1,70 @@
+{
+  "name": "@aegiskit/cli",
+  "version": "0.1.0",
+  "description": "The Aegis CLI — scan, init, doctor, and CI integration with an accessible, low-false-positive report.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "aegis": "./dist/main.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aegiskit/dast": "workspace:*",
+    "@aegiskit/scanner": "workspace:*",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "keywords": [
+    "security",
+    "cli",
+    "sast",
+    "dast",
+    "sarif",
+    "nextjs",
+    "supabase",
+    "ci",
+    "appsec",
+    "scanner"
+  ],
+  "author": "tomodahinata",
+  "homepage": "https://github.com/tomodahinata/aegis/tree/main/packages/cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomodahinata/aegis.git",
+    "directory": "packages/cli"
+  },
+  "bugs": "https://github.com/tomodahinata/aegis/issues",
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
+  }
+}

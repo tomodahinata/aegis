@@ -1,0 +1,66 @@
+{
+  "name": "@aegiskit/core",
+  "version": "0.1.0",
+  "description": "Framework-agnostic, edge-safe security primitives for Aegis: CSP, security headers, rate limiting, CSRF/origin, typed env, and security events.",
+  "license": "MIT",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "fast-check": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "keywords": [
+    "security",
+    "csp",
+    "content-security-policy",
+    "rate-limiting",
+    "csrf",
+    "security-headers",
+    "nextjs",
+    "edge",
+    "appsec"
+  ],
+  "author": "tomodahinata",
+  "homepage": "https://github.com/tomodahinata/aegis/tree/main/packages/core#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomodahinata/aegis.git",
+    "directory": "packages/core"
+  },
+  "bugs": "https://github.com/tomodahinata/aegis/issues",
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
+  }
+}

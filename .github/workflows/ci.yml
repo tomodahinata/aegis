@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same ref supersedes an in-flight run — saves CI minutes, keeps statuses honest.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: CI only reads the repo.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: build · typecheck · test · lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # pnpm before setup-node, so setup-node's pnpm cache can resolve the store. Version comes from
+      # the root package.json `packageManager` field (single source of truth).
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The same gates as the local `pnpm verify`, split into steps so a failure names the gate that
+      # broke. typecheck/test resolve `@aegiskit/*` to `src` (the dev condition); build proves the
+      # published `dist` artifacts compile.
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm lint

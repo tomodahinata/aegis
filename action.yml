@@ -1,0 +1,42 @@
+name: 'Aegis Security Scan'
+description: 'Run the Aegis application-layer security scanner in CI — SARIF output, GitHub annotations, and a failing status on findings.'
+author: 'Aegis'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  severity:
+    description: 'Severity threshold that fails the run (BLOCKER|HIGH|MEDIUM|LOW|INFO).'
+    required: false
+    default: 'HIGH'
+  strict:
+    description: 'Fail on findings of any confidence (not just high).'
+    required: false
+    default: 'false'
+  working-directory:
+    description: 'Project root to scan.'
+    required: false
+    default: '.'
+  sarif-file:
+    description: 'Path to write the SARIF report.'
+    required: false
+    default: 'aegis.sarif'
+  baseline:
+    description: 'Optional path to an aegis-baseline.json (fail only on new findings).'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run aegis ci
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        npx --yes @aegiskit/cli ci \
+          --severity "${{ inputs.severity }}" \
+          ${{ inputs.strict == 'true' && '--strict' || '' }} \
+          ${{ inputs.baseline != '' && format('--baseline {0}', inputs.baseline) || '' }} \
+          --sarif-out "${{ inputs.sarif-file }}" \
+          --annotations

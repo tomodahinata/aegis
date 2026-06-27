@@ -1,0 +1,54 @@
+name: Release
+
+# Changesets two-phase flow on every push to main:
+#   1. changesets present  → open/refresh a "Version Packages" PR (bumps versions, writes CHANGELOGs)
+#   2. that PR merges (changesets consumed) → `pnpm release` builds and publishes to npm
+on:
+  push:
+    branches: [main]
+
+# Never cancel an in-flight publish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write # commit version bumps, push tags, open the release PR
+  pull-requests: write # the "Version Packages" PR
+  id-token: write # npm provenance via OIDC (supply-chain attestation)
+
+jobs:
+  release:
+    name: version or publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # changesets needs full history to compute the changelog
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # pnpm substitutes ${NPM_TOKEN} from the publish step's env — the token is never written to disk.
+      - name: Prepare npm auth
+        run: echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' >> .npmrc
+
+      - name: Create the Version Packages PR, or publish when it merges
+        uses: changesets/action@v1
+        with:
+          version: pnpm version-packages
+          publish: pnpm release
+          commit: "chore(release): version packages"
+          title: "chore(release): version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Provenance is intentionally OFF: npm provenance requires a PUBLIC source repository, and
+          # this repo is private. Once the repository is public, re-add `NPM_CONFIG_PROVENANCE: "true"`
+          # here to publish supply-chain attestations automatically.

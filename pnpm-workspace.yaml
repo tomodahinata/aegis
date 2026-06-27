@@ -1,0 +1,13 @@
+# Workspace layout + a central `catalog:` so shared dependency versions live in ONE place
+# (a single authoritative representation — DRY — and the only file to touch on a bump).
+packages:
+  - 'packages/*'
+  - 'apps/*'
+
+catalog:
+  '@types/node': ^24.0.0
+  fast-check: ^4.8.0
+  tsup: ^8.5.1
+  typescript: ^6.0.3
+  vitest: ^4.1.9
+  zod: ^4.4.3

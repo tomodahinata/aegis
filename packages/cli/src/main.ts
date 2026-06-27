@@ -1,0 +1,207 @@
+#!/usr/bin/env node
+import { parseArgs } from 'node:util';
+import type { Severity } from '@aegiskit/scanner';
+import { runCi } from './commands/ci';
+import { runDoctor } from './commands/doctor';
+import { runFix } from './commands/fix';
+import { runInit } from './commands/init';
+import { runProbe } from './commands/probe';
+import { type OutputFormat, runScan } from './commands/scan';
+import { EXIT } from './exit';
+import { resolveRoot } from './root';
+
+const HELP = `aegis — application-layer security for Next.js / Supabase
+
+Usage: aegis <command> [path] [options]
+
+Commands:
+  scan      Scan the project and print findings
+  fix       Preview safe auto-fixes (and a remediation plan); apply with --write
+  ci        Scan for CI: SARIF output, GitHub annotations, stable exit codes
+  init      Scaffold a secure() middleware (idempotent)
+  doctor    Audit effective security config (optionally against a running URL)
+  probe     Dynamically probe a RUNNING app you own; confirm findings at runtime
+
+[path] is an optional directory to operate on (default: --cwd, else current directory).
+
+Options:
+  --format <pretty|json|sarif>   scan output format (default: pretty); fix: pretty|json
+  --severity <BLOCKER|HIGH|MEDIUM|LOW|INFO>   threshold that fails the run (default: HIGH)
+  --strict                       fail on findings of any confidence (default: high only)
+  --no-color                     disable ANSI color
+  --plain                        screen-reader-friendly output
+  --write                        (fix) apply the auto-fixes (default: preview only)
+  --rule <id>                    (fix) limit remediation to a single rule
+  --baseline <file>              (scan) apply a baseline; fail only on NEW findings
+  --update-baseline              (scan) write/refresh aegis-baseline.json from current findings
+  --show-suppressed              (scan) include suppressed findings, flagged
+  --sarif-out <file>             (ci) write SARIF to a file
+  --annotations                  (ci) emit GitHub ::error:: annotations
+  --url <url>                    (doctor) check live response headers
+  --dry-run                      (init) print the scaffold; (probe) plan requests without sending
+  --correlate                    (probe) run a static scan and confirm matching findings at runtime
+  --active                       (probe) enable active (state-changing) probes; auth/IDOR also need test identities, supplied only via the @aegiskit/dast API
+  --allow-remote                 (probe) allow a non-loopback target (with --i-own)
+  --i-own <statement>            (probe) ownership attestation required for a remote target
+  --max-requests <n>             (probe) hard cap on total requests (default 500)
+  --cwd <dir>                    project root (default: current directory)
+  --help                         show this help
+
+Probe targets default to localhost only; a remote host requires --allow-remote AND --i-own.
+
+Exit codes: 0 clean · 1 findings · 2 usage error · 3 internal error
+`;
+
+class UsageError extends Error {}
+
+const SEVERITIES: readonly string[] = ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+const FORMATS: readonly string[] = ['pretty', 'json', 'sarif'];
+
+function parseSeverity(value: string | undefined): Severity {
+  if (value === undefined) {
+    return 'HIGH';
+  }
+  const upper = value.toUpperCase();
+  if (SEVERITIES.includes(upper)) {
+    return upper as Severity;
+  }
+  throw new UsageError(`invalid --severity "${value}"`);
+}
+
+function parseFormat(value: string | undefined): OutputFormat {
+  if (value === undefined) {
+    return 'pretty';
+  }
+  if (FORMATS.includes(value)) {
+    return value as OutputFormat;
+  }
+  throw new UsageError(`invalid --format "${value}"`);
+}
+
+function str(value: string | boolean | undefined): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+async function main(): Promise<number> {
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: {
+      format: { type: 'string' },
+      severity: { type: 'string' },
+      strict: { type: 'boolean', default: false },
+      'no-color': { type: 'boolean', default: false },
+      plain: { type: 'boolean', default: false },
+      baseline: { type: 'string' },
+      'update-baseline': { type: 'boolean', default: false },
+      'show-suppressed': { type: 'boolean', default: false },
+      write: { type: 'boolean', default: false },
+      rule: { type: 'string' },
+      'sarif-out': { type: 'string' },
+      annotations: { type: 'boolean', default: false },
+      url: { type: 'string' },
+      'dry-run': { type: 'boolean', default: false },
+      correlate: { type: 'boolean', default: false },
+      active: { type: 'boolean', default: false },
+      'allow-remote': { type: 'boolean', default: false },
+      'i-own': { type: 'string' },
+      'max-requests': { type: 'string' },
+      cwd: { type: 'string' },
+      help: { type: 'boolean', default: false },
+    },
+  });
+
+  const command = positionals[0];
+  if (values.help === true || command === undefined) {
+    process.stdout.write(HELP);
+    return values.help === true ? EXIT.CLEAN : EXIT.USAGE;
+  }
+
+  // Honor an optional positional path (`aegis scan apps/dashboard`); fall back to --cwd, then cwd.
+  const cwd = resolveRoot(positionals[1], str(values.cwd), process.cwd());
+  const severity = parseSeverity(str(values.severity));
+  const strict = values.strict === true;
+  const sarifOut = str(values['sarif-out']);
+  const url = str(values.url);
+
+  switch (command) {
+    case 'scan': {
+      const baseline = str(values.baseline);
+      return runScan({
+        cwd,
+        format: parseFormat(str(values.format)),
+        severity,
+        strict,
+        noColor: values['no-color'] === true,
+        plain: values.plain === true,
+        showSuppressed: values['show-suppressed'] === true,
+        updateBaseline: values['update-baseline'] === true,
+        ...(baseline !== undefined ? { baseline } : {}),
+      });
+    }
+    case 'fix': {
+      const format = parseFormat(str(values.format));
+      if (format === 'sarif') {
+        throw new UsageError('fix supports --format pretty|json');
+      }
+      const rule = str(values.rule);
+      return runFix({
+        cwd,
+        write: values.write === true,
+        format,
+        noColor: values['no-color'] === true,
+        plain: values.plain === true,
+        ...(rule !== undefined ? { rule } : {}),
+      });
+    }
+    case 'ci':
+      return runCi({
+        cwd,
+        ...(sarifOut !== undefined ? { sarifOut } : {}),
+        annotations: values.annotations === true,
+        severity,
+        strict,
+      });
+    case 'init':
+      return runInit({ cwd, dryRun: values['dry-run'] === true });
+    case 'doctor':
+      return runDoctor({ cwd, ...(url !== undefined ? { url } : {}) });
+    case 'probe': {
+      // For `probe`, the positional is the TARGET URL (not a path); cwd comes from --cwd.
+      const target = positionals[1] ?? url;
+      if (target === undefined) {
+        throw new UsageError(
+          'probe requires a target URL, e.g. `aegis probe http://localhost:3000`',
+        );
+      }
+      const iOwn = str(values['i-own']);
+      const maxRequests = str(values['max-requests']);
+      const mode =
+        values['dry-run'] === true ? 'dry-run' : values.active === true ? 'active' : 'passive';
+      return runProbe({
+        cwd: str(values.cwd) ?? process.cwd(),
+        url: target,
+        format: parseFormat(str(values.format)),
+        severity,
+        strict,
+        noColor: values['no-color'] === true,
+        plain: values.plain === true,
+        mode,
+        correlate: values.correlate === true,
+        allowRemote: values['allow-remote'] === true,
+        ...(iOwn !== undefined ? { iOwn } : {}),
+        ...(maxRequests !== undefined ? { maxRequests: Number(maxRequests) } : {}),
+      });
+    }
+    default:
+      process.stderr.write(`aegis: unknown command "${command}"\n\n${HELP}`);
+      return EXIT.USAGE;
+  }
+}
+
+main()
+  .then((code) => process.exit(code))
+  .catch((error: unknown) => {
+    const code = error instanceof UsageError ? EXIT.USAGE : EXIT.INTERNAL;
+    process.stderr.write(`aegis: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(code);
+  });

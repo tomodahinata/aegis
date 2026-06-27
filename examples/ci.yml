@@ -1,0 +1,29 @@
+# Example: run the Aegis security scan in CI and upload SARIF to GitHub code-scanning.
+# Copy to .github/workflows/security.yml in your repo.
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  aegis:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # required to upload SARIF
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Aegis security scan
+        uses: your-org/aegis@v1
+        with:
+          severity: HIGH
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: aegis.sarif
