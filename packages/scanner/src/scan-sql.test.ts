@@ -305,6 +305,118 @@ describe('scanSql — rls/policy-not-owner-scoped (RLS exists but does not scope
   });
 });
 
+describe('scanSql — rls/anon-writable (anon can modify/delete existing rows)', () => {
+  const RULE = 'rls/anon-writable';
+  const table = `create table public.jobs (id uuid primary key, user_id uuid, is_public boolean, share_slug text);
+                 alter table public.jobs enable row level security;`;
+
+  it('flags an anon UPDATE policy whose predicate only checks row state (the row-state-only gap)', () => {
+    expect(
+      ruleIds(
+        `${table}
+         create policy "public bump" on public.jobs for update to anon, authenticated
+           using (is_public = true and share_slug is not null)
+           with check (is_public = true and share_slug is not null);`,
+      ),
+    ).toContain(RULE);
+  });
+
+  it('flags an anon DELETE gated only on row state', () => {
+    expect(
+      ruleIds(
+        `${table}
+         create policy "p" on public.jobs for delete to anon using (is_public = true);`,
+      ),
+    ).toContain(RULE);
+  });
+
+  it('does NOT flag an anon INSERT (a public submission form is a legitimate pattern)', () => {
+    expect(
+      ruleIds(
+        `${table}
+         create policy "p" on public.jobs for insert to anon with check (is_public = true);`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('does NOT flag an anon UPDATE whose predicate is owner-bound (anon matches no row)', () => {
+    expect(
+      ruleIds(
+        `${table}
+         create policy "p" on public.jobs for update to anon using (auth.uid() = user_id);`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('does NOT flag a write policy with the same predicate when anon is NOT a grantee', () => {
+    expect(
+      ruleIds(
+        `${table}
+         create policy "p" on public.jobs for update to authenticated using (is_public = true);`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('leaves the unconditional-USING case to rls/permissive-write-policy (no double report)', () => {
+    const ids = ruleIds(
+      `${table}
+       create policy "p" on public.jobs for update to anon using (true);`,
+    );
+    expect(ids).toContain('rls/permissive-write-policy');
+    expect(ids).not.toContain(RULE);
+  });
+
+  it('flags a no-TO-clause UPDATE (Postgres applies it to PUBLIC, which includes anon)', () => {
+    // The most common Supabase form: no `TO` clause + a row-state predicate. Postgres defaults the
+    // policy to PUBLIC, so an unauthenticated visitor can modify published rows — must not be missed.
+    expect(
+      ruleIds(
+        `${table}
+         create policy "p" on public.jobs for update using (is_public = true);`,
+      ),
+    ).toContain(RULE);
+  });
+
+  it('does NOT flag a no-TO-clause UPDATE whose predicate is owner-bound', () => {
+    expect(
+      ruleIds(
+        `${table}
+         create policy "p" on public.jobs for update using (auth.uid() = user_id);`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('flags an explicit `to public` DELETE gated only on row state', () => {
+    expect(
+      ruleIds(
+        `${table}
+         create policy "p" on public.jobs for delete to public using (is_public = true);`,
+      ),
+    ).toContain(RULE);
+  });
+
+  it('flags a FOR ALL policy to anon with a row-state USING predicate', () => {
+    expect(
+      ruleIds(
+        `${table}
+         create policy "p" on public.jobs for all to anon
+           using (is_public = true) with check (is_public = true);`,
+      ),
+    ).toContain(RULE);
+  });
+
+  it('reports BOTH rules for FOR ALL USING (row-state) WITH CHECK (true) — complementary defects', () => {
+    // USING row-state lets anon target existing rows (anon-writable); WITH CHECK true leaves the
+    // resulting state unconstrained (permissive-write). Two distinct gaps → two findings, by design.
+    const ids = ruleIds(
+      `${table}
+       create policy "p" on public.jobs for all to anon using (is_public = true) with check (true);`,
+    );
+    expect(ids).toContain(RULE);
+    expect(ids).toContain('rls/permissive-write-policy');
+  });
+});
+
 describe('scanSql — final-state migration semantics (DROP/ALTER supersede, no stale FPs)', () => {
   const ids = (sql: string): string[] =>
     scanSql({ files: ['/m/1.sql'], readFile: () => sql }).findings.map((f) => f.ruleId);

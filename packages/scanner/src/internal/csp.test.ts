@@ -71,4 +71,42 @@ describe('findCspUnsafeUses', () => {
   it('returns nothing for a policy with no unsafe keywords', () => {
     expect(findCspUnsafeUses("default-src 'self'; script-src 'self' 'strict-dynamic'")).toEqual([]);
   });
+
+  describe("CSP Level 3 neutralization of 'unsafe-inline'", () => {
+    it("does NOT flag 'unsafe-inline' alongside a nonce (the recommended fallback pattern)", () => {
+      // A nonce makes 'unsafe-inline' inert in CSP3 browsers; flagging it is a false positive.
+      expect(
+        findCspUnsafeUses(
+          "script-src 'self' 'nonce-abc123' 'strict-dynamic' https: 'unsafe-inline'",
+        ),
+      ).toEqual([]);
+    });
+
+    it("does NOT flag 'unsafe-inline' alongside a hash source", () => {
+      expect(findCspUnsafeUses("style-src 'self' 'sha256-AbC=' 'unsafe-inline'")).toEqual([]);
+    });
+
+    it("does NOT flag 'unsafe-inline' alongside 'strict-dynamic' in a script directive", () => {
+      expect(findCspUnsafeUses("script-src 'strict-dynamic' 'unsafe-inline'")).toEqual([]);
+    });
+
+    it("STILL flags 'unsafe-inline' in style-src when only 'strict-dynamic' (script-only) is present", () => {
+      // 'strict-dynamic' has no effect on style-src, so it does not neutralize style 'unsafe-inline'.
+      expect(findCspUnsafeUses("style-src 'strict-dynamic' 'unsafe-inline'")).toEqual<
+        CspUnsafeUse[]
+      >([{ keyword: 'unsafe-inline', context: 'style' }]);
+    });
+
+    it("STILL flags 'unsafe-eval' even with a nonce — a nonce does not neutralize eval", () => {
+      expect(findCspUnsafeUses("script-src 'nonce-abc123' 'strict-dynamic' 'unsafe-eval'")).toEqual<
+        CspUnsafeUse[]
+      >([{ keyword: 'unsafe-eval', context: 'script' }]);
+    });
+
+    it("STILL flags a bare 'unsafe-inline' with no nonce/hash (real weakness)", () => {
+      expect(findCspUnsafeUses("script-src 'self' 'unsafe-inline'")).toEqual<CspUnsafeUse[]>([
+        { keyword: 'unsafe-inline', context: 'script' },
+      ]);
+    });
+  });
 });

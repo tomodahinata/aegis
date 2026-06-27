@@ -1,3 +1,4 @@
+import { codeOnlyText } from '../internal/ast';
 import { hasAnyToken } from '../internal/patterns';
 import { wrapRouteHandlersWithSecureRoute } from '../internal/wrap-route';
 import { docsUrlFor, type Rule } from '../rule';
@@ -31,7 +32,10 @@ export const missingOriginCheck: Rule = {
     if (mutating.length === 0) {
       return;
     }
-    const text = ctx.file.text;
+    // Match the auth/origin heuristics against CODE only — a comment that merely *names* `@supabase/ssr`
+    // or `cookies(` (e.g. a Sentry-tunnel route explaining its import exception) must not be read as
+    // evidence the handler is cookie-authenticated.
+    const text = codeOnlyText(ctx.file.sourceFile);
     if (!hasAnyToken(text, COOKIE_AUTH_TOKENS)) {
       return; // not cookie-authed → not an ambient-authority CSRF target here
     }

@@ -1,5 +1,5 @@
 import { ts } from '../internal/ast';
-import { shannonEntropy } from '../internal/entropy';
+import { looksLikeCharsetAlphabet, shannonEntropy } from '../internal/entropy';
 import { collectStringLikes } from '../internal/patterns';
 import { docsUrlFor, type Rule } from '../rule';
 
@@ -43,6 +43,10 @@ function jwtRole(value: string): string | undefined {
 function looksLikeGenericSecret(value: string): boolean {
   return (
     TOKEN_SHAPE.test(value) &&
+    // A base62/base64/hex encoder's alphabet table is long, mixed-case, and high-entropy — exactly the
+    // generic-secret shape — but it is a public constant, not a credential. Exclude it (a real-world FP
+    // on base62/base64url ALPHABET constants).
+    !looksLikeCharsetAlphabet(value) &&
     /[a-z]/.test(value) &&
     /[A-Z]/.test(value) &&
     /[0-9]/.test(value) &&

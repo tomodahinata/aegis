@@ -13,6 +13,10 @@ import type { SqlRule } from '../sql-rule';
 const OWASP = 'A01:2021 Broken Access Control';
 const isWrite = (command: string): boolean =>
   command === 'insert' || command === 'update' || command === 'delete' || command === 'all';
+// `anon` and `public` are the two roles an unauthenticated visitor holds (PostgreSQL's `public` grants to
+// everyone, including `anon`). A policy with no `TO` clause applies to `public` — the model represents that
+// as an empty `roles` array, which callers must treat as implicit-public, not "no role".
+const isAnonRole = (role: string): boolean => role === 'anon' || role === 'public';
 
 export const tableWithoutRls: SqlRule = {
   meta: {
@@ -165,6 +169,66 @@ export const policyNotOwnerScoped: SqlRule = {
         evidence: writeCheckGap
           ? (policy.checkExpr ?? `${policy.table} ${policy.command} with check`)
           : (policy.usingExpr ?? policy.checkExpr ?? `${policy.table} ${policy.command}`),
+      });
+    }
+  },
+};
+
+/**
+ * A PERMISSIVE UPDATE/DELETE/ALL policy reachable by `anon`/`public` whose predicate does NOT bind rows
+ * to the caller — so an *unauthenticated* visitor can modify or delete EXISTING rows. A policy with no
+ * `TO` clause counts: PostgreSQL applies it to `public` (which includes `anon`), so it is exposed even
+ * though no role is named. INSERT is excluded (a public submission form is a legitimate anon-write
+ * pattern); only mutation of existing rows is the gap. The danger is a predicate an anonymous caller can
+ * satisfy: an unconditional `true` *in the USING predicate* is already owned by `permissiveWritePolicy`,
+ * so this rule targets the case that one misses — a row-STATE-only predicate (`unknown`: no auth
+ * primitive, no ownership binding, no membership subquery), e.g. `is_public = true AND share_slug is not
+ * null`. (A `true` in WITH CHECK is a *separate* post-image defect that `permissiveWritePolicy` reports;
+ * when the USING side is still row-state-only this rule also fires, and the two findings are complementary
+ * — one says anon can target existing rows, the other says the resulting row state is unconstrained.) An
+ * owner-bound or membership-delegated predicate matches no anon row (anon has no `auth.uid()`), so it
+ * never reaches here. Found validating against a real public view-counter table whose `GRANT UPDATE (col)`
+ * + permissive policy let anon UPDATE published rows — column-level GRANTs are not a robust row-ownership
+ * boundary on Supabase's default table grants.
+ */
+export const anonWritablePolicy: SqlRule = {
+  meta: {
+    id: 'rls/anon-writable',
+    title: 'Anonymous role can modify or delete existing rows',
+    severity: 'HIGH',
+    owasp: OWASP,
+    docsUrl: docsUrlFor('rls/anon-writable'),
+  },
+  check(ctx) {
+    for (const policy of ctx.model.policies) {
+      if (policy.restrictive) {
+        continue; // RESTRICTIVE only narrows access; it never grants the write
+      }
+      // Only mutation of EXISTING rows is the gap — INSERT (public submission forms) is intentional.
+      if (policy.command !== 'update' && policy.command !== 'delete' && policy.command !== 'all') {
+        continue;
+      }
+      // An empty `roles` array means no `TO` clause → PostgreSQL applies the policy to `public` (incl.
+      // `anon`), so it is exposed. A non-empty list must actually name `anon`/`public` to qualify.
+      const exposedRoles = policy.roles.length === 0 ? ['public'] : policy.roles.filter(isAnonRole);
+      if (exposedRoles.length === 0) {
+        continue;
+      }
+      // An unconditional `true` in the USING predicate is already reported by `permissiveWritePolicy`;
+      // flag the gap it misses — a row-state-only predicate an anonymous caller can satisfy.
+      if (effectivePolicyClass(policy) !== 'unknown') {
+        continue;
+      }
+      const roleLabel =
+        policy.roles.length === 0 ? 'public (no TO clause, includes anon)' : exposedRoles.join('/');
+      ctx.report({
+        loc: policy.loc,
+        confidence: 'medium',
+        message: `Policy on "${policy.table}" (${policy.command.toUpperCase()}) is reachable by ${roleLabel} and its predicate only checks row state, not the caller — an unauthenticated visitor can ${policy.command === 'delete' ? 'DELETE' : 'modify'} any row that satisfies it. A column-level GRANT does not stop this: on Supabase's default table grants, anon may already hold the table privilege.`,
+        remediation:
+          'Do not grant UPDATE/DELETE on existing rows to anon/public. Move the mutation behind a SECURITY DEFINER function (e.g. an `increment_view_count(slug)` RPC) that performs the scoped change, or restrict the policy to the authenticated owner with `USING (auth.uid() = user_id)`.',
+        evidence:
+          policy.usingExpr ?? policy.checkExpr ?? `${policy.table} ${policy.command} to anon`,
       });
     }
   },

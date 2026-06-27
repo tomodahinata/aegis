@@ -45,6 +45,16 @@ const STYLE_DIRECTIVES: ReadonlySet<string> = new Set([
 const UNSAFE_INLINE = "'unsafe-inline'";
 const UNSAFE_EVAL = "'unsafe-eval'";
 
+// A nonce-source or hash-source in the same directive makes `'unsafe-inline'` INERT in any CSP Level 3
+// browser (the spec mandates that `'unsafe-inline'` is ignored whenever a nonce/hash is present in that
+// same directive); `'strict-dynamic'` does the same for script directives. This is the *recommended*
+// hardened pattern —
+// `script-src 'nonce-…' 'strict-dynamic' 'unsafe-inline'` keeps `'unsafe-inline'` only as a fallback for
+// legacy CSP1 browsers — so reporting it as an active XSS bypass is a false positive (Google's CSP
+// Evaluator scores it the same way). `'unsafe-eval'` is NOT neutralized by either and stays reportable.
+const NONCE_OR_HASH = /'nonce-|'sha(?:256|384|512)-/i;
+const STRICT_DYNAMIC = "'strict-dynamic'";
+
 /** A directive name is a bare, lowercase, dash-joined identifier (`script-src`, `default-src`). */
 const DIRECTIVE_NAME = /^[a-z][a-z-]*$/;
 
@@ -72,6 +82,21 @@ function contextOf(segment: string): CspContext | 'inert' {
 }
 
 /**
+ * Is `'unsafe-inline'` neutralized within this directive segment? True when a nonce/hash source is also
+ * present (any directive), or `'strict-dynamic'` is present in a script directive — in either case a
+ * CSP Level 3 browser ignores `'unsafe-inline'`, so it is not an active bypass. Neutralization is
+ * evaluated per `;`-split segment and must stay that way: a nonce only neutralizes `'unsafe-inline'` in
+ * its OWN directive, so widening this across segments would suppress a genuinely unsafe directive (a
+ * fail-open).
+ */
+function inlineNeutralized(segment: string, context: CspContext): boolean {
+  if (NONCE_OR_HASH.test(segment)) {
+    return true;
+  }
+  return context === 'script' && segment.includes(STRICT_DYNAMIC);
+}
+
+/**
  * Every `'unsafe-inline'` / `'unsafe-eval'` use in `policyText`, paired with its directive context.
  * De-duplicated by `(keyword, context)` so one string literal yields at most one finding per pair.
  */
@@ -93,6 +118,9 @@ export function findCspUnsafeUses(policyText: string): CspUnsafeUse[] {
     for (const [has, keyword] of present) {
       if (!has) {
         continue;
+      }
+      if (keyword === 'unsafe-inline' && inlineNeutralized(segment, context)) {
+        continue; // a nonce/hash/strict-dynamic in the same directive makes 'unsafe-inline' inert (CSP3)
       }
       const key = `${keyword}:${context}`;
       if (seen.has(key)) {

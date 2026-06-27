@@ -1,6 +1,7 @@
 import type { SqlRule } from '../sql-rule';
 import {
   anonTableGrant,
+  anonWritablePolicy,
   permissiveWritePolicy,
   policyNotOwnerScoped,
   securityDefinerSearchPath,
@@ -15,11 +16,13 @@ export const ALL_SQL_RULES: readonly SqlRule[] = [
   writePolicyWithoutCheck,
   permissiveWritePolicy,
   policyNotOwnerScoped,
+  anonWritablePolicy,
   anonTableGrant,
 ];
 
 export {
   anonTableGrant,
+  anonWritablePolicy,
   permissiveWritePolicy,
   policyNotOwnerScoped,
   securityDefinerSearchPath,

@@ -87,9 +87,14 @@ export function collectProcessEnvKeys(sourceFile: ts.SourceFile): EnvAccess[] {
 // Names that mark a secret. Suffix anchors avoid matching e.g. `KEYBOARD`.
 const SECRET_WORDS =
   /SECRET|SERVICE_ROLE|PRIVATE_KEY|PASSWORD|WEBHOOK|API_KEY|ACCESS_KEY|_KEY$|_TOKEN$/;
-// Values that are *designed* to be public — never flagged.
+// Values that are *designed* to be public, so `_KEY`/`_TOKEN` in the name is not a leak — never flagged.
+// INDEXNOW_KEY: the IndexNow protocol key is published at a well-known URL (`/{key}.txt`) and sent as a
+// query param to search engines — public by definition. `_SITE_KEY`: a reCAPTCHA / Turnstile / hCaptcha
+// *site* key is the public half embedded in the page (the secret half is the `SECRET_KEY`, still caught
+// above). Both terms are ANCHORED — bare `INDEXNOW`/`SITE_KEY` substrings would wrongly suppress real
+// secrets like `INDEXNOW_SECRET` or `WEBSITE_KEY` (no `_` before `SITE`), a detection bypass.
 const PUBLISHABLE =
-  /ANON_KEY|PUBLISHABLE_KEY|PUBLIC_KEY|CLIENT_ID|MEASUREMENT_ID|POSTHOG_KEY|SENTRY_DSN/;
+  /ANON_KEY|PUBLISHABLE_KEY|PUBLIC_KEY|CLIENT_ID|MEASUREMENT_ID|POSTHOG_KEY|SENTRY_DSN|INDEXNOW_KEY|(?:^|_)SITE_KEY$/;
 
 /** Does an env var name denote a secret (and not a known-publishable value)? */
 export function looksSecret(name: string): boolean {

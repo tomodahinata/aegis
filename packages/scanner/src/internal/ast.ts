@@ -178,4 +178,44 @@ export function collectExportedNames(sourceFile: ts.SourceFile): Set<string> {
   return names;
 }
 
+/**
+ * A copy of the file's source with every comment blanked to spaces (newlines preserved, so line numbers
+ * are unchanged) and all real code — including import specifiers and string literals — kept verbatim.
+ *
+ * This exists so substring/keyword heuristics (`hasAnyToken`) match only CODE, never prose in a comment.
+ * A documentary mention is a real false-positive source: e.g. a Sentry-tunnel route whose comment reads
+ * "the same status as `@supabase/ssr` in middleware" tripped the CSRF rule's cookie-auth detection,
+ * flagging a handler that never touches cookies. Strings are deliberately KEPT — `from '@supabase/ssr'`
+ * is a genuine cookie-auth signal — so only comments are removed.
+ *
+ * Guaranteed invariants (both hold regardless of how any ambiguous token is classified): the output has
+ * the SAME length and line structure as the input, and every character is either kept verbatim or
+ * replaced by a space — never added or altered. So this can only ever REMOVE code, never invent it, which
+ * is exactly what keyword heuristics need: a comment can never manufacture a false match (fail-safe), and
+ * line numbers are preserved. It is NOT guaranteed to equal "input minus comments": the bare lexer has no
+ * parser context, so in division-/JSX-ambiguous positions it can misclassify real code as comment trivia
+ * and blank it too (e.g. a regex literal whose body contains `/* *\/`, or JSX text containing `//`). That
+ * only ever drops a signal (a possible false negative), never creates one, so it is safe for this use.
+ * Strings and import specifiers are kept verbatim — `from '@supabase/ssr'` is a genuine cookie-auth signal.
+ */
+export function codeOnlyText(sourceFile: ts.SourceFile): string {
+  const full = sourceFile.getFullText();
+  const scanner = ts.createScanner(
+    ts.ScriptTarget.Latest,
+    /* skipTrivia */ false,
+    sourceFile.languageVariant,
+    full,
+  );
+  let out = '';
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    const text = scanner.getTokenText();
+    out +=
+      token === ts.SyntaxKind.SingleLineCommentTrivia ||
+      token === ts.SyntaxKind.MultiLineCommentTrivia
+        ? text.replace(/[^\n]/g, ' ')
+        : text;
+  }
+  return out;
+}
+
 export { ts };

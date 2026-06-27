@@ -38,13 +38,21 @@ export function identCallSink(
   };
 }
 
-/** `receiver.method(...)` — a method call by name (e.g. `axios.get(url)`, `fs.readFile(path)`). */
+/**
+ * `receiver.method(...)` — a method call by name (e.g. `axios.get(url)`, `fs.readFile(path)`).
+ *
+ * `receiverMatches` (optional) further constrains the call to a specific receiver shape. It is what
+ * separates a genuinely dangerous `document.write(...)` from the many innocuous `.write()` methods that
+ * share the name (`process.stdout.write`, a Node stream/socket, `res.write`, a file handle) — without it
+ * a bare method-name match flags those as DOM sinks (a real false positive). Omitted ⇒ any receiver.
+ */
 export function methodCallSink(
   id: string,
   category: SinkCategory,
   label: string,
   methods: ReadonlySet<string>,
   which: ArgSelector,
+  receiverMatches?: (receiver: ts.Expression) => boolean,
 ): TaintSink {
   return {
     id,
@@ -53,7 +61,8 @@ export function methodCallSink(
     match: (node) =>
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
-      methods.has(node.expression.name.text)
+      methods.has(node.expression.name.text) &&
+      (receiverMatches === undefined || receiverMatches(node.expression.expression))
         ? pickArgs(node.arguments, which)
         : [],
   };
