@@ -1,7 +1,15 @@
 'use client';
 
+import { useEffect } from 'react';
+
 /** Route error boundary — `role="alert"` so screen readers announce the failure; offers a retry. */
-export default function EventsError({ reset }: { error: Error; reset: () => void }) {
+export default function EventsError({ error, reset }: { error: Error; reset: () => void }) {
+  // A failed event load means the operator's security feed is down — surface it to telemetry rather
+  // than swallowing it. The user-facing copy stays generic; only the logged side carries detail.
+  useEffect(() => {
+    console.error('events route failed to render', error);
+  }, [error]);
+
   return (
     <div role="alert" className="space-y-3">
       <h1 className="font-bold text-2xl">Events</h1>
