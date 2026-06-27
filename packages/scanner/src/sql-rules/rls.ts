@@ -6,6 +6,7 @@
  * (reference data) — conservative toward zero false positives, with the recall trade-off documented.
  */
 
+import { effectivePolicyClass, isAuthenticatedOnlyGap } from '../internal/sql/predicate';
 import { docsUrlFor } from '../rule';
 import type { SqlRule } from '../sql-rule';
 
@@ -112,6 +113,59 @@ export const permissiveWritePolicy: SqlRule = {
           evidence: `${policy.table} ${policy.command} permissive`,
         });
       }
+    }
+  },
+};
+
+/**
+ * The moat rule: RLS that *exists* but does not *scope rows to the caller*. A PERMISSIVE policy whose
+ * predicate only proves the caller is authenticated — `auth.role() = 'authenticated'`, `auth.uid() IS
+ * NOT NULL` — on a table that carries an ownership column lets every logged-in user read/modify EVERY
+ * row, not just their own. This is the gap Supabase's "is RLS enabled?" check and the existing rules
+ * here all miss. Aegis cannot read your intent (a table may be deliberately shared), so it reports at
+ * `medium` confidence — surfaced for review, never failing CI. The escape hatches (membership subquery,
+ * delegated function, owner-bound predicate, no ownership column) are all handled by `classifyPredicate`
+ * returning a non-`authenticated-only` class, so they never reach here.
+ */
+export const policyNotOwnerScoped: SqlRule = {
+  meta: {
+    id: 'rls/policy-not-owner-scoped',
+    title: 'RLS policy authenticates the caller but does not scope rows to them',
+    severity: 'HIGH',
+    owasp: OWASP,
+    docsUrl: docsUrlFor('rls/policy-not-owner-scoped'),
+  },
+  check(ctx) {
+    for (const policy of ctx.model.policies) {
+      if (policy.restrictive) {
+        continue; // RESTRICTIVE narrows access; it never grants it, so it is never the gap
+      }
+      if (!policy.tableHasOwnershipColumn) {
+        continue; // no ownership column ⇒ likely intentionally shared/reference data (fail secure)
+      }
+      if (!isAuthenticatedOnlyGap(policy)) {
+        continue; // owner-bound / role-delegated / function-delegated / unconditional / unknown → safe or out of scope
+      }
+      // A write-only gap is one where USING scopes correctly but WITH CHECK only checks "is logged in" —
+      // the read side is fine, but writes are unrestricted. Attribute the message to that write path so
+      // the remediation points at the right clause (SEC-01).
+      const writeCheckGap =
+        policy.command !== 'select' &&
+        policy.checkClass === 'authenticated-only' &&
+        effectivePolicyClass(policy) !== 'authenticated-only';
+      const message = writeCheckGap
+        ? `Policy on "${policy.table}" (${policy.command.toUpperCase()}) scopes reads to the caller but its WITH CHECK only verifies the caller is authenticated (e.g. auth.uid() IS NOT NULL) — any authenticated user can write rows they don't own or set the ownership column to someone else's id (IDOR write). Aegis flags this for review; the USING clause alone looked correct.`
+        : `Policy on "${policy.table}" (${policy.command.toUpperCase()}) only checks that the caller is authenticated (e.g. auth.role()/auth.uid() IS NOT NULL), but the table has an ownership column — every authenticated user can ${policy.command === 'select' ? 'read' : 'read or modify'} EVERY row, not just their own. Aegis flags this for review; it cannot confirm whether the table is meant to be shared.`;
+      ctx.report({
+        loc: policy.loc,
+        confidence: 'medium',
+        message,
+        remediation:
+          'Scope the policy to the caller, e.g. `USING (auth.uid() = user_id)` (with a matching `WITH CHECK (auth.uid() = user_id)` for writes). If this table is intentionally readable by all authenticated users (reference/lookup data), this is expected — no change needed.',
+        evidence: writeCheckGap
+          ? (policy.checkExpr ?? `${policy.table} ${policy.command} with check`)
+          : (policy.usingExpr ?? policy.checkExpr ?? `${policy.table} ${policy.command}`),
+      });
     }
   },
 };

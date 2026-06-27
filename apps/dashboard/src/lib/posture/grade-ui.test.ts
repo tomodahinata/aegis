@@ -20,4 +20,14 @@ describe('severityToVisual', () => {
       expect(visual.glyph.length).toBeGreaterThan(0);
     }
   });
+
+  it('uses a DISTINCT glyph per severity (distinguishable by shape, not just hue — WCAG 1.4.1)', () => {
+    const glyphs = (['low', 'medium', 'high'] as const).map((s) => severityToVisual(s).glyph);
+    expect(new Set(glyphs).size).toBe(glyphs.length);
+  });
+
+  it('ranks severities most-severe first (high < medium < low)', () => {
+    expect(severityToVisual('high').rank).toBeLessThan(severityToVisual('medium').rank);
+    expect(severityToVisual('medium').rank).toBeLessThan(severityToVisual('low').rank);
+  });
 });

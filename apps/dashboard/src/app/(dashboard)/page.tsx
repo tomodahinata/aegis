@@ -24,7 +24,12 @@ export default async function OverviewPage() {
         <h2 id="recent-heading" className="font-semibold text-lg">
           Recent events
         </h2>
-        <EventsTable events={recent} caption="The ten most recent security events." now={now} />
+        <EventsTable
+          events={recent}
+          caption="The ten most recent security events."
+          now={now}
+          sort="recent"
+        />
       </section>
     </div>
   );

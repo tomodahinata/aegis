@@ -1,11 +1,13 @@
 import type { PostureBucket } from '@aegiskit/observability';
 import { Card } from '@/components/ui/card';
+import { summarizeTrend } from '@/lib/posture/trend';
 
 const WIDTH = 240;
 const HEIGHT = 48;
 
 /** An accessible sparkline: an SVG with role/label + a visually-hidden data table (WCAG 1.1.1). */
 export function TrendSparkline({ buckets }: { buckets: readonly PostureBucket[] }) {
+  const trend = summarizeTrend(buckets);
   const max = Math.max(1, ...buckets.map((b) => b.weightedVolume));
   const divisor = Math.max(1, buckets.length - 1);
   const points = buckets
@@ -19,6 +21,8 @@ export function TrendSparkline({ buckets }: { buckets: readonly PostureBucket[] 
   return (
     <Card>
       <h2 className="font-medium text-muted text-sm">Event volume (24h)</h2>
+      {/* Trend stated in words, so it is not conveyed by the line's shape/color alone (WCAG 1.4.1). */}
+      <p className="mt-1 text-sm">Trend: {trend.label}</p>
       <svg
         role="img"
         aria-label={`Severity-weighted event volume across ${buckets.length} hourly buckets over the last 24 hours.`}

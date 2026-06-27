@@ -11,8 +11,9 @@
 import { readFileSync } from 'node:fs';
 import { forEachDescendant, parseSource, rangeOf, ts } from './internal/ast';
 import { buildRlsModel, type RlsModel } from './internal/sql/model';
+import { isAuthenticatedOnlyGap } from './internal/sql/predicate';
 import { docsUrlFor } from './rule';
-import type { Finding } from './types';
+import type { Confidence, Finding } from './types';
 
 export interface CorrelateRlsOptions {
   readonly sqlFiles: readonly string[];
@@ -20,20 +21,47 @@ export interface CorrelateRlsOptions {
   readonly readFile?: (path: string) => string;
 }
 
-/** Tables whose RLS is weak enough that a non-admin query exposes data → reason text for the message. */
-function weakTables(model: RlsModel): Map<string, string> {
-  const weak = new Map<string, string>();
+/** Why a table's RLS is weak, plus how confident we are the query site is a real exposure. */
+interface WeakReason {
+  readonly reason: string;
+  readonly confidence: Confidence;
+}
+
+/**
+ * Tables whose RLS is weak enough that a non-admin query exposes data. Confidence is carried per table:
+ * no-RLS and unconditional-write are unambiguous exposures (`high`, CI-blocking); an authenticated-only
+ * policy is a "RLS exists but doesn't scope to the caller" read exposure that depends on intent (the
+ * table may be deliberately shared), so it is `medium` — non-blocking, mirroring `rls/policy-not-owner-
+ * scoped`. The `!weak.has` guards ensure a high reason is never downgraded to medium.
+ */
+function weakTables(model: RlsModel): Map<string, WeakReason> {
+  const weak = new Map<string, WeakReason>();
   for (const table of model.tables.values()) {
     if (!table.rlsEnabled) {
-      weak.set(table.name, 'has no Row Level Security');
+      weak.set(table.name, { reason: 'has no Row Level Security', confidence: 'high' });
     }
   }
   for (const policy of model.policies) {
-    if (!policy.restrictive && (policy.usingTrue || policy.checkTrue)) {
-      const write = policy.command !== 'select';
-      if (write && !weak.has(policy.table)) {
-        weak.set(policy.table, 'has an unconditional write policy');
-      }
+    if (policy.restrictive) {
+      continue;
+    }
+    if (
+      (policy.usingTrue || policy.checkTrue) &&
+      policy.command !== 'select' &&
+      !weak.has(policy.table)
+    ) {
+      weak.set(policy.table, { reason: 'has an unconditional write policy', confidence: 'high' });
+      continue;
+    }
+    if (
+      policy.tableHasOwnershipColumn &&
+      isAuthenticatedOnlyGap(policy) &&
+      !weak.has(policy.table)
+    ) {
+      weak.set(policy.table, {
+        reason: 'has an RLS policy that only checks authentication, not row ownership',
+        confidence: 'medium',
+      });
     }
   }
   return weak;
@@ -89,13 +117,21 @@ export function correlateRls(options: CorrelateRlsOptions): Finding[] {
     const sourceFile = parseSource(file, text);
     forEachDescendant(sourceFile, (node) => {
       const table = fromTableName(node);
-      const reason = table ? weak.get(table) : undefined;
-      if (table && reason) {
+      const entry = table ? weak.get(table) : undefined;
+      if (table && entry) {
+        // High-confidence reasons (no RLS, unconditional write) are confirmed exposures. The medium
+        // authenticated-only path is intent-dependent — the table MAY be deliberately shared — so it gets
+        // softer, accurate copy and never the absolute "confirmed exposure" phrasing (SEC-02 + the repo
+        // framing rule: Aegis never claims it can confirm a table is meant to be private).
+        const exposure =
+          entry.confidence === 'high'
+            ? 'any authenticated/anonymous user can read or modify this data (confirmed exposure)'
+            : 'every authenticated user can read every row, not just their own — flagged for review; Aegis cannot confirm the table is meant to be private';
         findings.push({
           ruleId: 'rls/exposed-table-access',
           severity: 'HIGH',
-          confidence: 'high',
-          message: `Table "${table}" ${reason} and is queried here via a non-admin Supabase client — any authenticated/anonymous user can read or modify this data (confirmed exposure).`,
+          confidence: entry.confidence,
+          message: `Table "${table}" ${entry.reason} and is queried here via a non-admin Supabase client — ${exposure}.`,
           file,
           range: rangeOf(sourceFile, node),
           docsUrl: docsUrlFor('rls/exposed-table-access'),

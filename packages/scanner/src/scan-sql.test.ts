@@ -2,6 +2,7 @@ import { readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { SQL_LABELS } from '../fixtures/labels';
 import { ANALYSIS_ERROR_RULE } from './internal/analysis-error';
 import { scanSql } from './scan-sql';
 
@@ -158,6 +159,209 @@ describe('scanSql — RLS rules detect their inverse', () => {
   });
 });
 
+describe('scanSql — rls/policy-not-owner-scoped (RLS exists but does not scope to the caller)', () => {
+  const RULE = 'rls/policy-not-owner-scoped';
+  const scan1 = (sql: string) => scanSql({ files: ['/m/1.sql'], readFile: () => sql });
+  const idsOf = (sql: string): string[] => scan1(sql).findings.map((f) => f.ruleId);
+
+  it('fires at MEDIUM confidence on an authenticated-only SELECT over a table with an ownership column', () => {
+    const finding = scan1(
+      `create table public.docs (id uuid primary key, user_id uuid not null, body text);
+       alter table public.docs enable row level security;
+       create policy "p" on public.docs for select to authenticated using (auth.role() = 'authenticated');`,
+    ).findings.find((f) => f.ruleId === RULE);
+    expect(finding).toBeDefined();
+    expect(finding?.confidence).toBe('medium'); // non-blocking: surfaced for review, never fails CI
+    expect(finding?.severity).toBe('HIGH');
+  });
+
+  it('fires on `auth.uid() IS NOT NULL`', () => {
+    expect(
+      idsOf(
+        `create table public.docs (id uuid, tenant_id uuid not null);
+         alter table public.docs enable row level security;
+         create policy "p" on public.docs for select to authenticated using (auth.uid() is not null);`,
+      ),
+    ).toContain(RULE);
+  });
+
+  it('does NOT fire on an owner-bound policy (auth.uid() = user_id)', () => {
+    expect(
+      idsOf(
+        `create table public.docs (id uuid, user_id uuid not null);
+         alter table public.docs enable row level security;
+         create policy "p" on public.docs for select to authenticated using (auth.uid() = user_id);`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('does NOT fire when the table has no ownership column (shared/reference data)', () => {
+    expect(
+      idsOf(
+        `create table public.regions (code text primary key, name text);
+         alter table public.regions enable row level security;
+         create policy "p" on public.regions for select to authenticated using (auth.uid() is not null);`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('does NOT fire on a membership subquery (role-delegated) or a custom function (function-delegated)', () => {
+    expect(
+      idsOf(
+        `create table public.docs (id uuid, team_id uuid not null);
+         alter table public.docs enable row level security;
+         create policy "p" on public.docs for select to authenticated
+           using (team_id in (select team_id from public.members where user_id = auth.uid()));`,
+      ),
+    ).not.toContain(RULE);
+    expect(
+      idsOf(
+        `create table public.docs (id uuid, user_id uuid not null);
+         alter table public.docs enable row level security;
+         create policy "p" on public.docs for all to authenticated using (public.has_access(id)) with check (public.has_access(id));`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('does NOT fire on a RESTRICTIVE authenticated-only policy (deny refinement)', () => {
+    expect(
+      idsOf(
+        `create table public.docs (id uuid, user_id uuid not null);
+         alter table public.docs enable row level security;
+         create policy "p" on public.docs as restrictive for all to authenticated using (auth.uid() is not null);`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('resolves the ownership column across files (table in one migration, policy in another)', () => {
+    const result = scanSql({
+      files: ['/m/1.sql', '/m/2.sql'],
+      readFile: (p) =>
+        p.endsWith('1.sql')
+          ? 'create table public.docs (id uuid primary key, user_id uuid not null);'
+          : `alter table public.docs enable row level security;
+             create policy "p" on public.docs for select to authenticated using (auth.role() = 'authenticated');`,
+    });
+    expect(result.findings.map((f) => f.ruleId)).toContain(RULE);
+  });
+
+  it('resolves an ownership column added later via ALTER TABLE ADD COLUMN', () => {
+    expect(
+      idsOf(
+        `create table public.docs (id uuid primary key, body text);
+         alter table public.docs add column user_id uuid not null;
+         alter table public.docs enable row level security;
+         create policy "p" on public.docs for select to authenticated using (auth.uid() is not null);`,
+      ),
+    ).toContain(RULE);
+  });
+
+  // COR-01: an `auth.*` token inside a comment or a string literal must NOT manufacture this finding.
+  it('does NOT fire when auth.uid() appears only inside a SQL comment (no false positive)', () => {
+    expect(
+      idsOf(
+        `create table public.docs (id uuid primary key, user_id uuid not null, status text);
+         alter table public.docs enable row level security;
+         create policy "p" on public.docs for select to authenticated
+           using (status = 'published' /* auth.uid() = user_id */);`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('does NOT fire when auth.role() appears only inside a string literal (no false positive)', () => {
+    expect(
+      idsOf(
+        `create table public.docs (id uuid primary key, user_id uuid not null, note text);
+         alter table public.docs enable row level security;
+         create policy "p" on public.docs for select to authenticated using (note = 'see auth.role()');`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  // SEC-01: a correct USING with a weak WITH CHECK on a write-capable command is the IDOR-write gap.
+  it('fires on FOR ALL with an owner-bound USING but an authenticated-only WITH CHECK (write-check gap)', () => {
+    const finding = scan1(
+      `create table public.docs (id uuid primary key, user_id uuid not null, body text);
+       alter table public.docs enable row level security;
+       create policy "p" on public.docs for all to authenticated
+         using (auth.uid() = user_id) with check (auth.uid() is not null);`,
+    ).findings.find((f) => f.ruleId === RULE);
+    expect(finding).toBeDefined();
+    expect(finding?.confidence).toBe('medium');
+    // The message and evidence are attributed to the write path (WITH CHECK), not the (correct) USING.
+    expect(finding?.message).toMatch(/WITH CHECK/i);
+    expect(finding?.evidence).toContain('is not null');
+  });
+
+  it('does NOT fire on FOR ALL when BOTH USING and WITH CHECK are owner-bound (correct write policy)', () => {
+    expect(
+      idsOf(
+        `create table public.docs (id uuid primary key, user_id uuid not null, body text);
+         alter table public.docs enable row level security;
+         create policy "p" on public.docs for all to authenticated
+           using (auth.uid() = user_id) with check (auth.uid() = user_id);`,
+      ),
+    ).not.toContain(RULE);
+  });
+});
+
+describe('scanSql — final-state migration semantics (DROP/ALTER supersede, no stale FPs)', () => {
+  const ids = (sql: string): string[] =>
+    scanSql({ files: ['/m/1.sql'], readFile: () => sql }).findings.map((f) => f.ruleId);
+
+  it('DROP POLICY removes a permissive policy that was later recreated safely (no stale FP)', () => {
+    const sql = `create table public.t (id uuid primary key, user_id uuid not null);
+      alter table public.t enable row level security;
+      create policy p on public.t for all to authenticated using (true) with check (true);
+      drop policy p on public.t;
+      create policy p on public.t for all to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);`;
+    expect(ids(sql)).not.toContain('rls/permissive-write-policy');
+    expect(ids(sql)).not.toContain('rls/policy-not-owner-scoped');
+  });
+
+  it('DROP POLICY IF EXISTS lets a weak policy be fixed by recreation (no policy-not-owner-scoped FP)', () => {
+    const sql = `create table public.docs (id uuid primary key, user_id uuid not null);
+      alter table public.docs enable row level security;
+      create policy d on public.docs for select to authenticated using (auth.uid() is not null);
+      drop policy if exists d on public.docs;
+      create policy d on public.docs for select to authenticated using (auth.uid() = user_id);`;
+    expect(ids(sql)).not.toContain('rls/policy-not-owner-scoped');
+  });
+
+  it('ALTER POLICY updates the predicate (a weakening ALTER is detected)', () => {
+    const sql = `create table public.docs (id uuid primary key, user_id uuid not null);
+      alter table public.docs enable row level security;
+      create policy d on public.docs for select to authenticated using (auth.uid() = user_id);
+      alter policy d on public.docs using (auth.uid() is not null);`;
+    expect(ids(sql)).toContain('rls/policy-not-owner-scoped');
+  });
+
+  it('ALTER POLICY that strengthens the predicate clears the finding (no FP)', () => {
+    const sql = `create table public.docs (id uuid primary key, user_id uuid not null);
+      alter table public.docs enable row level security;
+      create policy d on public.docs for select to authenticated using (auth.uid() is not null);
+      alter policy d on public.docs using (auth.uid() = user_id);`;
+    expect(ids(sql)).not.toContain('rls/policy-not-owner-scoped');
+  });
+
+  it('CREATE OR REPLACE FUNCTION with a pinned search_path supersedes an earlier unpinned one (no FP)', () => {
+    const sql = `create function public.f() returns void language sql security definer as $$ select 1; $$;
+      create or replace function public.f() returns void language sql security definer set search_path = '' as $$ select 1; $$;`;
+    expect(ids(sql)).not.toContain('rls/security-definer-search-path');
+  });
+
+  it('DROP FUNCTION removes a since-deleted unpinned SECURITY DEFINER function (no FP)', () => {
+    const sql = `create function public.f() returns void language sql security definer as $$ select 1; $$;
+      drop function public.f();`;
+    expect(ids(sql)).not.toContain('rls/security-definer-search-path');
+  });
+
+  it('still flags a live unpinned SECURITY DEFINER function (recall preserved)', () => {
+    const sql = `create function public.f() returns void language sql security definer as $$ select 1; $$;`;
+    expect(ids(sql)).toContain('rls/security-definer-search-path');
+  });
+});
+
 describe('scanSql — disk fixtures', () => {
   it('exemplary good migration yields ZERO findings', () => {
     expect(scanSql({ files: sqlFilesIn(join(SQL_FIXTURES, 'good')) }).findings).toEqual([]);
@@ -167,13 +371,9 @@ describe('scanSql — disk fixtures', () => {
     const ids = new Set(
       scanSql({ files: sqlFilesIn(join(SQL_FIXTURES, 'vuln')) }).findings.map((f) => f.ruleId),
     );
-    for (const id of [
-      'rls/table-without-rls',
-      'rls/security-definer-search-path',
-      'rls/write-policy-without-check',
-      'rls/permissive-write-policy',
-      'rls/anon-table-grant',
-    ]) {
+    const expected = SQL_LABELS.find((l) => l.dir === 'vuln')?.expect ?? [];
+    expect(expected.length).toBeGreaterThan(0);
+    for (const id of expected) {
       expect([...ids]).toContain(id);
     }
   });

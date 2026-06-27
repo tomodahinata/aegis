@@ -69,6 +69,61 @@ export const insecureRandomness: Rule = {
 
 const WEAK_HASH = /^(?:md5|sha1)$/i;
 
+/**
+ * Names that mark a weak hash as a NON-security use, where MD5/SHA-1 is fine: RFC-4122 v3/v5 UUIDs (the
+ * spec mandates MD5/SHA-1), cache keys, ETags, checksums, asset/build fingerprints, gravatars. Weak
+ * hashing is only a vulnerability for security purposes (signatures, integrity, passwords, tokens). A
+ * real password hash is never named `uuid`/`etag`/`cacheKey`, so this suppresses false positives without
+ * losing real findings.
+ *
+ * Tokens are deliberately specific: `cache[_-]?key` (not bare `cache`, which would swallow
+ * `cacheSessionToken`) and `(?:asset|build|file)[_-]?fingerprint` (not bare `fingerprint`, which would
+ * swallow `deviceFingerprint`/browser-fingerprints used for auth and fraud detection).
+ */
+const NON_SECURITY_HASH_CONTEXT =
+  /uuid|guid|etag|cache[_-]?key|checksum|(?:asset|build|file)[_-]?fingerprint|dedup|content[_-]?address|gravatar|avatar/i;
+
+/** The name of the nearest enclosing function/method (for an arrow/expr, its assigned variable name). */
+function enclosingFunctionName(node: ts.Node): string | undefined {
+  for (let cur = node.parent; cur; cur = cur.parent) {
+    if (ts.isFunctionDeclaration(cur) || ts.isMethodDeclaration(cur)) {
+      return cur.name?.getText();
+    }
+    if (ts.isFunctionExpression(cur) || ts.isArrowFunction(cur)) {
+      const parent = cur.parent;
+      if (parent && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)) {
+        return parent.name.text;
+      }
+      return parent && ts.isPropertyAssignment(parent) ? parent.name.getText() : undefined;
+    }
+    if (ts.isSourceFile(cur)) {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Does the enclosing function manipulate RFC-4122 version/variant bits (v3=0x30 / v5=0x50 plus the
+ * 0x80/0x3f variant mask)? That idiom is the signature of a deterministic-UUID builder — a non-security
+ * use of MD5/SHA-1 even when the function is not named "uuid".
+ */
+function buildsRfc4122Uuid(node: ts.Node): boolean {
+  for (let cur = node.parent; cur; cur = cur.parent) {
+    if (
+      ts.isFunctionDeclaration(cur) ||
+      ts.isFunctionExpression(cur) ||
+      ts.isArrowFunction(cur) ||
+      ts.isMethodDeclaration(cur) ||
+      ts.isSourceFile(cur)
+    ) {
+      const text = cur.getText();
+      return /0x0f/i.test(text) && /0x[35]0/i.test(text) && /0x(?:80|3f|bf)/i.test(text);
+    }
+  }
+  return false;
+}
+
 export const weakHash: Rule = {
   meta: {
     id: 'crypto/weak-hash',
@@ -93,6 +148,13 @@ export const weakHash: Rule = {
       }
       const algorithm = node.arguments[0];
       if (algorithm && ts.isStringLiteralLike(algorithm) && WEAK_HASH.test(algorithm.text)) {
+        // Suppress recognized NON-security uses (UUID v3/v5, cache keys, ETags, checksums). Fail-secure
+        // toward a false negative on this MEDIUM-confidence rule rather than a false positive that erodes
+        // trust — a security-relevant hash (password/signature/integrity) never carries these signals.
+        const context = `${namingContext(node) ?? ''} ${enclosingFunctionName(node) ?? ''}`;
+        if (NON_SECURITY_HASH_CONTEXT.test(context) || buildsRfc4122Uuid(node)) {
+          return;
+        }
         ctx.report({
           node,
           // Medium: it may be a non-security checksum, so it informs without blocking CI.

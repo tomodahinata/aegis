@@ -1,17 +1,29 @@
 import { defineConfig } from 'vitest/config';
 
 /**
- * Single root config. Cross-package imports (`@aegiskit/*`) resolve to each package's
- * `src/index.ts` via its package.json `exports` (the dev condition), so tests run
- * against TypeScript source with no build step.
+ * Multi-project root config. Most tests run in a Node environment against TypeScript source — cross-
+ * package `@aegiskit/*` imports resolve to each package's `src/index.ts` via the `development` export
+ * condition, so there is no build step. The dashboard has its own project (jsdom + the `@` alias) for
+ * React component / accessibility tests; see `apps/dashboard/vitest.config.ts`.
  */
 export default defineConfig({
-  // Resolve `@aegiskit/*` to each package's `src` (the `development` export condition).
-  resolve: { conditions: ['development'] },
   test: {
-    include: ['packages/*/src/**/*.test.ts', 'apps/*/src/**/*.test.ts'],
-    environment: 'node',
     passWithNoTests: true,
-    clearMocks: true,
+    projects: [
+      {
+        resolve: { conditions: ['development'] },
+        test: {
+          name: 'unit',
+          include: [
+            'packages/*/src/**/*.test.ts',
+            'packages/*/bench/**/*.test.ts',
+            'apps/*/src/**/*.test.ts',
+          ],
+          environment: 'node',
+          clearMocks: true,
+        },
+      },
+      './apps/dashboard/vitest.config.ts',
+    ],
   },
 });

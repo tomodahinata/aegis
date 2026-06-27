@@ -9,6 +9,8 @@
   --card: #ffffff;
   --border: #e5e7eb;
   --primary: #1d4ed8;
+  /* Text/icon color ON a --primary surface. Paired so on-primary text always meets AA (1.4.3): */
+  --primary-foreground: #ffffff; /* white on #1d4ed8 = 6.70:1 */
   --ring: #1d4ed8;
   --tone-good: #047857;
   --tone-ok: #1d4ed8;
@@ -23,6 +25,7 @@
   --card: #141414;
   --border: #262626;
   --primary: #60a5fa;
+  --primary-foreground: #0a0a0a; /* dark on #60a5fa = 7.79:1 (white would be 2.54:1 — a 1.4.3 FAIL) */
   --ring: #60a5fa;
   --tone-good: #34d399;
   --tone-ok: #60a5fa;
@@ -38,6 +41,7 @@
   --card: #000000;
   --border: #ffffff;
   --primary: #ffff00;
+  --primary-foreground: #000000; /* black on #ffff00 = 19.56:1 */
   --ring: #ffff00;
   --tone-good: #00ff7f;
   --tone-ok: #7fd4ff;
@@ -52,6 +56,7 @@
   --color-card: var(--card);
   --color-border: var(--border);
   --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
   --color-ring: var(--ring);
   --color-tone-good: var(--tone-good);
   --color-tone-ok: var(--tone-ok);

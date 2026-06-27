@@ -1,5 +1,12 @@
 import { relative } from 'node:path';
-import type { Finding, ScanResult, Severity } from '@aegiskit/scanner';
+import {
+  type Confidence,
+  type Finding,
+  type ScanResult,
+  SEVERITY_ORDER,
+  type Severity,
+  type Summary,
+} from '@aegiskit/scanner';
 import { type Palette, palette } from '../internal/colors';
 
 interface SeverityStyle {
@@ -23,6 +30,78 @@ export interface RenderOptions {
   /** Screen-reader-friendly: label-prefixed fields, no glyphs or box-drawing. */
   readonly plain: boolean;
   readonly cwd?: string;
+}
+
+// Display order, most urgent first. `SEVERITY_ORDER` is the scanner's canonical ranking, reused here
+// as the priority ranks for the sort below. The scanner exposes no confidence order, so it stays local.
+const CONFIDENCE_ORDER: readonly Confidence[] = ['high', 'medium', 'low'];
+
+function rankOf<T>(order: readonly T[], value: T): number {
+  return order.indexOf(value);
+}
+
+/**
+ * Total order so the most important finding renders first and output is byte-stable for snapshots:
+ * severity → confidence → file → line → column → ruleId. Sorting is display-only and runs on a COPY —
+ * the engine's canonical `result.findings` order (consumed by JSON/SARIF/baseline) is never mutated.
+ */
+function byPriority(a: Finding, b: Finding): number {
+  return (
+    rankOf(SEVERITY_ORDER, a.severity) - rankOf(SEVERITY_ORDER, b.severity) ||
+    rankOf(CONFIDENCE_ORDER, a.confidence) - rankOf(CONFIDENCE_ORDER, b.confidence) ||
+    a.file.localeCompare(b.file) ||
+    a.range.startLine - b.range.startLine ||
+    a.range.startColumn - b.range.startColumn ||
+    a.ruleId.localeCompare(b.ruleId)
+  );
+}
+
+/** Compact "fix first" location: a source `file:line`, or the HTTP target for a dynamic finding. */
+function headlineLocation(finding: Finding, rel: (file: string) => string): string {
+  return finding.target
+    ? `${finding.target.method} ${finding.target.path}`
+    : `${rel(finding.file)}:${finding.range.startLine}`;
+}
+
+/**
+ * A prioritized headline: total count, file count, severity breakdown, and the single highest-priority
+ * finding to "fix first" — the actionable next step. Carries meaning by label + glyph (never color
+ * alone); the plain branch is glyph-free and label-prefixed for screen readers. Assumes `ordered` is
+ * non-empty (only called when there are findings).
+ */
+function appendHeadline(
+  lines: string[],
+  ordered: readonly Finding[],
+  summary: Summary,
+  c: Palette,
+  rel: (file: string) => string,
+  plain: boolean,
+): void {
+  const first = ordered[0];
+  if (!first) {
+    return;
+  }
+  const files = new Set(ordered.map((finding) => finding.file)).size;
+  const count = `${ordered.length} finding${ordered.length === 1 ? '' : 's'} across ${files} file${files === 1 ? '' : 's'}`;
+  const where = headlineLocation(first, rel);
+
+  if (plain) {
+    lines.push(`Summary: ${count}`);
+    lines.push(`Severity counts: ${SEVERITY_ORDER.map((s) => `${s} ${summary[s]}`).join(', ')}`);
+    lines.push(`Fix first: ${first.ruleId}, severity ${first.severity}, ${where}`);
+    lines.push('');
+    return;
+  }
+
+  const breakdown = SEVERITY_ORDER.filter((s) => summary[s] > 0)
+    .map((s) => `${summary[s]} ${s.toLowerCase()}`)
+    .join(', ');
+  const style = STYLES[first.severity];
+  lines.push(`${c.bold('Aegis')}  ${count}  ·  ${breakdown}`);
+  lines.push(
+    `${c.dim('Fix first:')} ${c.bold(first.ruleId)}  ${c[style.color](`(${style.label} ${style.symbol})`)}  ${c.dim(where)}`,
+  );
+  lines.push('');
 }
 
 /** Longest `[kind]` tag, so step locations align in a column — alignment is a non-color visual cue. */
@@ -91,12 +170,16 @@ export function renderReport(result: ScanResult, options: RenderOptions): string
   const c = palette(options.color);
   const rel = (file: string): string => (options.cwd ? relative(options.cwd, file) : file);
   const lines: string[] = [];
+  // Display-only ordering on a COPY — never mutate the engine's canonical finding order.
+  const ordered = [...result.findings].sort(byPriority);
 
-  if (result.findings.length === 0) {
+  if (ordered.length === 0) {
     lines.push(c.green('✓ No security findings.'));
+  } else {
+    appendHeadline(lines, ordered, result.summary, c, rel, options.plain);
   }
 
-  for (const finding of result.findings) {
+  for (const finding of ordered) {
     const style = STYLES[finding.severity];
     // A dynamic (DAST) finding is located by its HTTP request, not a source line.
     const location = finding.target

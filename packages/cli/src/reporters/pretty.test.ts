@@ -130,6 +130,109 @@ describe('renderReport', () => {
       suppressedCount: 0,
       durationMs: 0,
     };
-    expect(renderReport(clean, { color: false, plain: false })).toContain('No security findings');
+    const out = renderReport(clean, { color: false, plain: false });
+    expect(out).toContain('No security findings');
+    expect(out).not.toContain('Fix first'); // no headline when there is nothing to fix
+  });
+});
+
+describe('renderReport — prioritized headline & ordering', () => {
+  const mk = (
+    ruleId: string,
+    severity: Finding['severity'],
+    confidence: Finding['confidence'] = 'high',
+    line = 1,
+  ): Finding => ({
+    ...aiFinding,
+    ruleId,
+    severity,
+    confidence,
+    range: { startLine: line, startColumn: 1, endLine: line, endColumn: 2 },
+  });
+
+  it('renders a rich headline with counts, severity breakdown, and "Fix first"', () => {
+    const out = renderReport(result, { color: false, plain: false });
+    expect(out).toContain('Aegis');
+    expect(out).toContain('1 finding across 1 file');
+    expect(out).toContain('1 high');
+    expect(out).toContain('Fix first: ratelimit/missing-on-ai-route');
+  });
+
+  it('orders findings by severity (BLOCKER → HIGH → MEDIUM) regardless of scan order', () => {
+    const mixed: ScanResult = {
+      ...result,
+      findings: [mk('r-med', 'MEDIUM'), mk('r-block', 'BLOCKER'), mk('r-high', 'HIGH')],
+      summary: { BLOCKER: 1, HIGH: 1, MEDIUM: 1, LOW: 0, INFO: 0 },
+    };
+    const out = renderReport(mixed, { color: false, plain: false });
+    expect(out.indexOf('r-block')).toBeLessThan(out.indexOf('r-high'));
+    expect(out.indexOf('r-high')).toBeLessThan(out.indexOf('r-med'));
+    expect(out).toContain('Fix first: r-block');
+  });
+
+  it('breaks ties below severity+confidence by file, then column, then ruleId', () => {
+    // All four share severity HIGH, confidence high, and startLine 1, so only the
+    // file → startColumn → ruleId tie-breakers decide order.
+    const at = (file: string, startColumn: number, ruleId: string): Finding => ({
+      ...aiFinding,
+      ruleId,
+      severity: 'HIGH',
+      confidence: 'high',
+      file,
+      range: { startLine: 1, startColumn, endLine: 1, endColumn: startColumn + 1 },
+    });
+    const findings = [
+      at('/p/b.ts', 9, 'z/late'),
+      at('/p/b.ts', 9, 'z/early'),
+      at('/p/b.ts', 3, 'm/mid'),
+      at('/p/a.ts', 50, 'a/first'),
+    ];
+    const tied: ScanResult = {
+      ...result,
+      findings,
+      summary: { BLOCKER: 0, HIGH: 4, MEDIUM: 0, LOW: 0, INFO: 0 },
+    };
+    const out = renderReport(tied, { color: false, plain: false });
+    // file 'a.ts' before 'b.ts'; lower startColumn first; then ruleId lexical order.
+    expect(out.indexOf('a/first')).toBeLessThan(out.indexOf('m/mid'));
+    expect(out.indexOf('m/mid')).toBeLessThan(out.indexOf('z/early'));
+    expect(out.indexOf('z/early')).toBeLessThan(out.indexOf('z/late'));
+  });
+
+  it('breaks severity ties by confidence (high before medium)', () => {
+    const tied: ScanResult = {
+      ...result,
+      findings: [mk('r-medium-conf', 'HIGH', 'medium'), mk('r-high-conf', 'HIGH', 'high')],
+      summary: { BLOCKER: 0, HIGH: 2, MEDIUM: 0, LOW: 0, INFO: 0 },
+    };
+    const out = renderReport(tied, { color: false, plain: false });
+    expect(out.indexOf('r-high-conf')).toBeLessThan(out.indexOf('r-medium-conf'));
+  });
+
+  it('does not mutate the input findings array (display-only sort)', () => {
+    const input = [mk('a', 'MEDIUM'), mk('b', 'BLOCKER')];
+    const res: ScanResult = {
+      ...result,
+      findings: input,
+      summary: { BLOCKER: 1, HIGH: 0, MEDIUM: 1, LOW: 0, INFO: 0 },
+    };
+    renderReport(res, { color: false, plain: false });
+    expect(input.map((f) => f.ruleId)).toEqual(['a', 'b']);
+  });
+
+  it('renders a glyph-free, label-prefixed headline in plain mode', () => {
+    const out = renderReport(result, { color: false, plain: true });
+    expect(out).toContain('Summary: 1 finding across 1 file');
+    expect(out).toContain('Severity counts: BLOCKER 0, HIGH 1, MEDIUM 0, LOW 0, INFO 0');
+    expect(out).toContain('Fix first: ratelimit/missing-on-ai-route, severity HIGH');
+  });
+
+  it('emits no ANSI escapes for a multi-finding report when color is disabled', () => {
+    const mixed: ScanResult = {
+      ...result,
+      findings: [mk('r-med', 'MEDIUM'), mk('r-block', 'BLOCKER')],
+      summary: { BLOCKER: 1, HIGH: 0, MEDIUM: 1, LOW: 0, INFO: 0 },
+    };
+    expect(renderReport(mixed, { color: false, plain: false }).includes(ESC)).toBe(false);
   });
 });

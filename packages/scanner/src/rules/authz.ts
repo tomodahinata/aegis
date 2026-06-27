@@ -1,5 +1,6 @@
 import { findExportedFunction, ts } from '../internal/ast';
 import { traceOf } from '../internal/dataflow';
+import { OWNERSHIP_COLUMN_PATTERN, OWNERSHIP_COLUMNS } from '../internal/ownership-columns';
 import { calleeName, collectCalls, hasAnyToken } from '../internal/patterns';
 import type { TaintFlow, TaintSink, TaintSpec } from '../internal/taint-descriptors';
 import { docsUrlFor, type Rule, type RuleContext } from '../rule';
@@ -76,33 +77,9 @@ function isSupabaseFromCall(call: ts.CallExpression): boolean {
 }
 
 // ── Ownership-filter dataflow (IDOR) ─────────────────────────────────────────────────────────────
-
-/**
- * Columns whose PURPOSE is to scope rows to a principal (a user / tenant / account). Filtering one of
- * these by request-controlled input defeats that purpose — the textbook IDOR. The bare primary key
- * `id` is deliberately EXCLUDED: `.eq('id', params.id)` is the ubiquitous "fetch one by id" that is
- * safe under RLS or a later ownership check, and flagging it would flood the zero-false-positive gate.
- * We flag only columns that exist to enforce ownership.
- */
-const OWNERSHIP_COLUMNS: ReadonlySet<string> = new Set([
-  'user_id',
-  'owner_id',
-  'tenant_id',
-  'organization_id',
-  'org_id',
-  'account_id',
-  'profile_id',
-  'team_id',
-  'workspace_id',
-  'customer_id',
-  'member_id',
-]);
-
-/**
- * Cheap pre-filter: an ownership column is always present (as the filter's string-literal argument) in
- * any code an IDOR flow could touch, so a file without one can skip the taint pass entirely.
- */
-const OWNERSHIP_HINT = new RegExp(`\\b(?:${[...OWNERSHIP_COLUMNS].join('|')})\\b`);
+// `OWNERSHIP_COLUMNS` (the principal-scoping columns) and `OWNERSHIP_COLUMN_PATTERN` (a cheap presence
+// pre-filter so a file without one can skip the taint pass) are the shared authoritative list, also
+// consumed by the SQL model and the owner-scoping RLS rule — see `internal/ownership-columns`.
 
 // PostgREST comparison filters where the column is arg0 and the compared value is arg1.
 const COMPARISON_FILTERS: ReadonlySet<string> = new Set([
@@ -248,7 +225,7 @@ export const missingAccessFilter: Rule = {
     // an IDOR — reported at high confidence by `authz/idor-tainted-scope`. Defer to it: emitting a
     // green pass here (the ownership token IS present) would contradict that finding, and a second,
     // weaker finding would be noise. The cheap text gate skips the taint pass on the common case.
-    if (OWNERSHIP_HINT.test(text) && taintedOwnershipFlows(ctx).length > 0) {
+    if (OWNERSHIP_COLUMN_PATTERN.test(text) && taintedOwnershipFlows(ctx).length > 0) {
       return;
     }
     if (AUTH_GATE.test(text) || hasAnyToken(text, OWNERSHIP_TOKENS)) {
@@ -305,7 +282,7 @@ export const idorTaintedScope: Rule = {
   },
   appliesTo: (file) =>
     (file.classification.isRouteHandler || file.classification.isServerAction) &&
-    OWNERSHIP_HINT.test(file.text),
+    OWNERSHIP_COLUMN_PATTERN.test(file.text),
   check(ctx) {
     // The admin/service-role client bypasses RLS by design to reach arbitrary rows, so a request id in
     // an ownership filter there is intentional, not an IDOR — suppress to protect the zero-false-positive

@@ -20,7 +20,11 @@
   ],
   "scripts": {
     "build": "tsup",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bench": "tsx bench/run.ts",
+    "bench:json": "tsx bench/run.ts --json",
+    "bench:check": "tsx bench/run.ts --check",
+    "bench:update": "tsx bench/run.ts --update"
   },
   "dependencies": {
     "typescript": "catalog:"
@@ -29,6 +33,7 @@
     "@types/node": "catalog:",
     "fast-check": "catalog:",
     "tsup": "catalog:",
+    "tsx": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {

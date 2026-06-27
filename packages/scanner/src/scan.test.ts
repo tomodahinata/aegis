@@ -2,6 +2,7 @@ import { readdirSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { TS_LABELS } from '../fixtures/labels';
 import { scan } from './engine';
 import { ANALYSIS_ERROR_RULE } from './internal/analysis-error';
 import type { Rule } from './rule';
@@ -22,41 +23,23 @@ function filesIn(dir: string): string[] {
 }
 
 describe('scanner — vulnerable fixtures each trigger their rule', () => {
-  const cases: ReadonlyArray<readonly [dir: string, ruleId: string]> = [
-    ['csp-unsafe-inline', 'csp/unsafe-inline'],
-    ['csp-nonce-unused', 'csp/nonce-minted-unused'],
-    ['headers-missing', 'headers/missing-security-headers'],
-    ['ratelimit-ai', 'ratelimit/missing-on-ai-route'],
-    ['public-secret', 'env/public-secret'],
-    ['secret-in-client', 'env/secret-in-client'],
-    ['secret-reachable-from-client', 'env/secret-in-client'],
-    ['service-role', 'supabase/service-role-outside-admin'],
-    ['csrf', 'csrf/missing-origin-check'],
-    ['dangerous-html', 'xss/dangerous-html-unsanitized'],
-    ['secret-literal', 'secrets/committed-literal'],
-    // Injection family (dataflow / taint).
-    ['sqli-supabase', 'injection/sql'],
-    ['ssrf-fetch', 'ssrf/tainted-fetch'],
-    ['xss-dom-innerhtml', 'xss/tainted-dom-sink'],
-    ['path-traversal', 'injection/path-traversal'],
-    ['command-injection', 'injection/command'],
-    ['open-redirect', 'redirect/open-redirect'],
-    ['code-injection', 'injection/code'],
-    // Cryptographic weaknesses + authorization.
-    ['weak-random-token', 'crypto/insecure-randomness'],
-    ['weak-hash', 'crypto/weak-hash'],
-    ['timing-compare', 'crypto/non-constant-time-compare'],
-    ['authz-missing-filter', 'authz/missing-access-filter'],
-    ['idor-tainted-scope', 'authz/idor-tainted-scope'],
-  ];
-
-  for (const [dir, ruleId] of cases) {
-    it(`flags ${ruleId}`, () => {
-      const result = scan({ files: filesIn(join(FIXTURES, 'vuln', dir)) });
+  for (const label of TS_LABELS) {
+    it(`flags ${label.expect.join(', ')} (${label.dir})`, () => {
+      const result = scan({ files: filesIn(join(FIXTURES, 'vuln', label.dir)) });
       const ruleIds = result.findings.map((finding) => finding.ruleId);
-      expect(ruleIds).toContain(ruleId);
+      for (const ruleId of label.expect) {
+        expect(ruleIds).toContain(ruleId);
+      }
     });
   }
+
+  it('labels cover every vuln fixture directory (no fixture left unlabeled)', () => {
+    const labeled = new Set(TS_LABELS.map((l) => l.dir));
+    const dirs = readdirSync(join(FIXTURES, 'vuln')).filter((d) =>
+      statSync(join(FIXTURES, 'vuln', d)).isDirectory(),
+    );
+    expect([...labeled].sort()).toEqual([...dirs].sort());
+  });
 });
 
 describe('scanner — the zero-false-positive trust gate', () => {
