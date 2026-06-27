@@ -49,6 +49,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          # Provenance is intentionally OFF: npm provenance requires a PUBLIC source repository, and
-          # this repo is private. Once the repository is public, re-add `NPM_CONFIG_PROVENANCE: "true"`
-          # here to publish supply-chain attestations automatically.
+          # Supply-chain provenance: the repo is public and id-token: write is granted, so every
+          # published package carries a signed attestation linking it to this commit and workflow run.
+          NPM_CONFIG_PROVENANCE: "true"
