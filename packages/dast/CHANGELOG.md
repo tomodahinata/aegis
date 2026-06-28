@@ -1,5 +1,13 @@
 # @aegiskit/dast
 
+## 0.0.2
+
+### Patch Changes
+
+- Updated dependencies [06a14c8]
+- Updated dependencies [430bb72]
+  - @aegiskit/scanner@0.2.0
+
 ## 0.0.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@aegiskit/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The Aegis CLI — scan, init, doctor, and CI integration with an accessible, low-false-positive report.",
   "license": "MIT",
   "type": "module",

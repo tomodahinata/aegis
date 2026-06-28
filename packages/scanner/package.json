@@ -1,6 +1,6 @@
 {
   "name": "@aegiskit/scanner",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Static analysis engine that finds the security gaps a runtime library can't fix — grounded in real vibe-coded Next.js/Supabase mistakes.",
   "license": "MIT",
   "type": "module",
