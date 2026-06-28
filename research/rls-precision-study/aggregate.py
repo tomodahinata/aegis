@@ -19,7 +19,16 @@ def i(r, k):
         return 0
 
 
-discovered = len(rows)
+# The code-search candidate pool (discover.sh -> repos.txt) is a wider funnel than
+# the repos we actually scanned (rows.csv); report both so the headline funnel
+# (candidates -> scanned -> ship-RLS) is unambiguous and matches the write-up.
+repos_txt = DATA / "repos.txt"
+candidates = (
+    sum(1 for line in repos_txt.read_text().splitlines() if line.strip())
+    if repos_txt.exists()
+    else None
+)
+scanned_attempted = len(rows)
 status = {}
 for r in rows:
     status[r["status"]] = status.get(r["status"], 0) + 1
@@ -48,7 +57,9 @@ L.append("# Supabase RLS owner-scope study — results\n")
 L.append("> Static analysis of public GitHub repositories with the Aegis scanner. "
          "Public source only; no live probing of any deployed app.\n")
 L.append("## Headline\n")
-L.append(f"- Repos discovered (code search): **{discovered}**")
+if candidates is not None:
+    L.append(f"- Code-search candidates (unique public repos): **{candidates}**")
+L.append(f"- Repos scanned (attempted): **{scanned_attempted}**")
 L.append(f"- Successfully scanned: **{len(scanned)}**  (" +
          ", ".join(f"{k}={v}" for k, v in sorted(status.items())) + ")")
 L.append(f"- Of those, ship RLS (>=1 CREATE POLICY): **{len(with_rls)}**")

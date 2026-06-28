@@ -76,7 +76,18 @@ export interface Rule {
   check(ctx: RuleContext): void;
 }
 
-/** Build a canonical docs URL for a rule id. */
-export function docsUrlFor(ruleId: string): string {
-  return `https://aegis.dev/rules/${ruleId.replace(/\//g, '-')}`;
+/** Canonical project home — single source for every user-facing Aegis URL. */
+export const PROJECT_URL = 'https://github.com/tomodahinata/aegis';
+
+/**
+ * Build a docs URL for a rule id. Every rule is documented as one row (keyed by
+ * its verbatim id) in the coverage matrix, so we deep-link to that section.
+ *
+ * `ruleId` is intentionally unused for now: no per-rule pages exist yet, and a
+ * rule-specific fragment would not match any heading — GitHub would silently
+ * scroll to the top. A correct, always-resolving link beats a dead one
+ * (fail-safe). When per-rule docs land, restore the id here and nowhere else.
+ */
+export function docsUrlFor(_ruleId: string): string {
+  return `${PROJECT_URL}/blob/main/docs/coverage.md#rules`;
 }

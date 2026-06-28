@@ -9,7 +9,7 @@ const aiFinding: Finding = {
   message: 'no rate limit',
   file: '/project/app/api/ai/route.ts',
   range: { startLine: 5, startColumn: 3, endLine: 5, endColumn: 9 },
-  docsUrl: 'https://aegis.dev/rules/ratelimit-missing-on-ai-route',
+  docsUrl: 'https://github.com/tomodahinata/aegis/rules/ratelimit-missing-on-ai-route',
   remediation: 'add a limiter',
   owasp: 'A04:2021',
 };

@@ -12,7 +12,7 @@ const BASE: Finding = {
   message: 'A secret is read in client-reachable code.',
   file: '/app/widget.tsx',
   range: RANGE,
-  docsUrl: 'https://aegis.dev/rules/env-secret-in-client',
+  docsUrl: 'https://github.com/tomodahinata/aegis/rules/env-secret-in-client',
   remediation: 'Move the read server-side.',
 };
 

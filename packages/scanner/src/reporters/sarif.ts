@@ -1,3 +1,4 @@
+import { PROJECT_URL } from '../rule';
 import type { Finding, ScanResult, Severity, SourceRange } from '../types';
 
 function sarifLevel(severity: Severity): 'error' | 'warning' | 'note' {
@@ -111,7 +112,7 @@ export function toSarif(result: ScanResult): string {
     version: '2.1.0',
     runs: [
       {
-        tool: { driver: { name: 'aegis', informationUri: 'https://aegis.dev', rules } },
+        tool: { driver: { name: 'aegis', informationUri: PROJECT_URL, rules } },
         results,
       },
     ],

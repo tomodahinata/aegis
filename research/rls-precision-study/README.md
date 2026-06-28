@@ -9,12 +9,27 @@ behind the claim that Aegis's zero-false-positive design holds on the shapes rea
 > false-positive-laden raw rate to a verified-genuine one — distilling each false-positive class into a
 > permanent regression fixture so the gain can never silently regress.
 
-## Headline (2026-06-28, 450 public repos with `supabase/migrations|schemas`)
+## Headline (2026-06-28)
 
-| | Flag rate | Findings | What the iteration fixed |
+**Population (funnel).** GitHub code search surfaced **2,230** unique public repositories with a
+`CREATE POLICY` under `supabase/migrations` or `supabase/schemas`; we scanned **450** of them. **445**
+ship RLS (≥ 1 `CREATE POLICY`), and **~52,800** RLS policies were analyzed in total. Static analysis of
+the migration SQL only — no deployed app was ever contacted (see ethics below).
+
+| | Flag rate (repos with RLS) | Findings (policies) | What the iteration fixed |
 |---|---:|---:|---|
 | raw (pre-hardening) | 19.3% | 573 | — (a full audit found **~83% were false positives**) |
-| after hardening | **8.1%** | **99** | **0 residual false positives** — every finding ground-truthed as a genuine authenticated-only gap |
+| after hardening | **8.1%** (36 / 445) | **99** | **0 residual false positives** — every finding ground-truthed as a genuine authenticated-only gap |
+
+So the hardened headline: **36 of the 445 RLS-shipping repos (8.1%)** have ≥ 1 policy that authenticates
+but does not scope rows to the owner — **99 such policies, ≈ 0.19% of all ~52,800 RLS policies analyzed**.
+
+> **Reproducible artifact.** Every figure above is exactly what [`aggregate.py`](./aggregate.py) emits from
+> a run (into the gitignored `data/summary.md`); they are recorded here so any number cited in the public
+> write-up traces to a committed source. Re-running the scripts repopulates a fresh corpus — because the
+> GitHub code-search population drifts over time, the rates will move slightly; this README pins the
+> 2026-06-28 run that the write-up cites. Raw clones and per-repo results stay `.gitignore`d (ethics +
+> size); the rates are aggregate and name no repository.
 
 Six verification iterations, each surfacing a real-world false-positive (or false-negative) class that the
 curated benchmark had missed:

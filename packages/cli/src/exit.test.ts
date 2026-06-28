@@ -10,7 +10,7 @@ function finding(severity: Severity, confidence: Confidence): Finding {
     message: 'm',
     file: '/a.ts',
     range: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 2 },
-    docsUrl: 'https://aegis.dev',
+    docsUrl: 'https://github.com/tomodahinata/aegis',
     remediation: 'r',
   };
 }

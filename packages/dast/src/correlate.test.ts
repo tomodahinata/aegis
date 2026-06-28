@@ -10,7 +10,7 @@ const staticFinding: Finding = {
   message: 'Untrusted input may reach a SQL query.',
   file: '/proj/app/api/search/route.ts',
   range: { startLine: 9, startColumn: 1, endLine: 9, endColumn: 1 },
-  docsUrl: 'https://aegis.dev/rules/injection-sql',
+  docsUrl: 'https://github.com/tomodahinata/aegis/rules/injection-sql',
   remediation: 'Parameterize.',
 };
 
@@ -29,7 +29,7 @@ const dynamic: DynamicFinding = {
   confidence: 'high',
   message: 'SQL injection confirmed.',
   owasp: 'A03:2021 Injection',
-  docsUrl: 'https://aegis.dev/rules/dast-sql-injection',
+  docsUrl: 'https://github.com/tomodahinata/aegis/rules/dast-sql-injection',
   remediation: 'Parameterize.',
   routePath: '/api/search',
   evidence: 'boolean differential (reproduced)',

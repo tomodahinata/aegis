@@ -16,7 +16,7 @@ const autoItem: RemediationItem = {
   problem: 'No origin check.',
   mode: 'auto',
   action: 'Wrap POST with secureRoute (origin check on)',
-  docsUrl: 'https://aegis.dev/rules/csrf-missing-origin-check',
+  docsUrl: 'https://github.com/tomodahinata/aegis/rules/csrf-missing-origin-check',
   diff: ' import x\n-export async function POST() {\n+export const POST = secureRoute(...)',
 };
 
@@ -29,7 +29,7 @@ const guidedItem: RemediationItem = {
   problem: 'Hard-coded secret.',
   mode: 'guided',
   action: 'Move it to a server-only env var and rotate it.',
-  docsUrl: 'https://aegis.dev/rules/secrets-committed-literal',
+  docsUrl: 'https://github.com/tomodahinata/aegis/rules/secrets-committed-literal',
 };
 
 describe('miniDiff', () => {

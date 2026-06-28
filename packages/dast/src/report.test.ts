@@ -9,7 +9,7 @@ function dynamicFinding(overrides: Partial<DynamicFinding> = {}): DynamicFinding
     confidence: 'high',
     message: 'open redirect',
     owasp: 'A01:2021 Broken Access Control',
-    docsUrl: 'https://aegis.dev/rules/dast-open-redirect',
+    docsUrl: 'https://github.com/tomodahinata/aegis/rules/dast-open-redirect',
     remediation: 'validate the redirect target',
     routePath: '/api/y',
     evidence: 'Location: //evil.com',
