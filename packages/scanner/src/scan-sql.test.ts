@@ -233,6 +233,100 @@ describe('scanSql — rls/policy-not-owner-scoped (RLS exists but does not scope
     ).not.toContain(RULE);
   });
 
+  // Field-validated false positives (a 450-repo public-corpus study): the rule fired on policies that are
+  // restrictive, or owner-bound written a way the matcher missed. Each must now stay silent.
+  it('does NOT fire on a service_role policy (backend-only, not "every authenticated user")', () => {
+    // The dominant real-world FP: a correctly owner-scoped table that ALSO grants the backend full access.
+    expect(
+      idsOf(
+        `create table public.tickets (id uuid primary key, user_id uuid not null, body text);
+         alter table public.tickets enable row level security;
+         create policy "own" on public.tickets for select using (auth.uid() = user_id);
+         create policy "svc" on public.tickets for all using (auth.role() = 'service_role');`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('does NOT fire on a JWT admin-claim gate (authorizes by claim, not "every authenticated user")', () => {
+    expect(
+      idsOf(
+        `create table public.conversations (id uuid primary key, user_id uuid not null, body text);
+         alter table public.conversations enable row level security;
+         create policy "admins" on public.conversations for select
+           using ((auth.jwt() -> 'app_metadata' ->> 'claims_admin')::boolean = true);`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('does NOT fire on owner-bound predicates written with casts or the Supabase `(select … as uid)` wrapper', () => {
+    expect(
+      idsOf(
+        `create table public.docs (id uuid primary key, user_id uuid not null);
+         alter table public.docs enable row level security;
+         create policy "p" on public.docs for select using (auth.uid()::text = user_id::text);`,
+      ),
+    ).not.toContain(RULE);
+    expect(
+      idsOf(
+        `create table public.sessions (id uuid primary key, user_id uuid not null);
+         alter table public.sessions enable row level security;
+         create policy "p" on public.sessions for insert to authenticated
+           with check (( select auth.uid() as uid) = user_id);`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  // Cross-rule regression: a service_role gate must classify as `role-delegated`, not `unknown`, or the
+  // sibling `rls/anon-writable` rule wrongly fires on an anon-reachable `FOR ALL` policy an anon caller can
+  // never satisfy. (This surfaced as 59 anon-writable false positives on a real public corpus.)
+  it('does NOT make anon-writable fire on a service_role FOR ALL policy with no TO clause', () => {
+    const ids = idsOf(
+      `create table public.audit (id uuid primary key, user_id uuid not null, action text);
+       alter table public.audit enable row level security;
+       create policy "owner_read" on public.audit for select to authenticated using (auth.uid() = user_id);
+       create policy "backend" on public.audit for all
+         using (auth.role() = 'service_role') with check (auth.role() = 'service_role');`,
+    );
+    expect(ids).not.toContain('rls/anon-writable');
+    expect(ids).not.toContain(RULE);
+  });
+
+  // Per-shape recall lock for the real-world gap forms in `fixtures/sql/vuln/rls-real-world-gaps.sql`. The
+  // disk-fixture test only asserts the rule fires SOMEWHERE across the vuln corpus, so each shape is pinned
+  // here individually — the precision hardening must not silently suppress any of them.
+  it('still fires on the quoted (declarative-schema) authenticated-only gap', () => {
+    expect(
+      idsOf(
+        `create table public.quoted_docs (id uuid primary key, user_id uuid not null, body text);
+         alter table public.quoted_docs enable row level security;
+         create policy "p" on public.quoted_docs for select to authenticated
+           using (("auth"."role"() = 'authenticated'::"text"));`,
+      ),
+    ).toContain(RULE);
+  });
+
+  it('still fires on the (select auth.uid()) IS NOT NULL session-proof gap', () => {
+    expect(
+      idsOf(
+        `create table public.wrapped_docs (id uuid primary key, owner_id uuid not null, body text);
+         alter table public.wrapped_docs enable row level security;
+         create policy "p" on public.wrapped_docs for select to authenticated
+           using ((select auth.uid()) is not null);`,
+      ),
+    ).toContain(RULE);
+  });
+
+  it('still fires on an OR-disjunction that re-widens past a service_role arm to every authenticated user', () => {
+    expect(
+      idsOf(
+        `create table public.mixed_docs (id uuid primary key, user_id uuid not null, body text);
+         alter table public.mixed_docs enable row level security;
+         create policy "p" on public.mixed_docs for select to authenticated
+           using (auth.role() = 'service_role' or auth.uid() is not null);`,
+      ),
+    ).toContain(RULE);
+  });
+
   it('resolves the ownership column across files (table in one migration, policy in another)', () => {
     const result = scanSql({
       files: ['/m/1.sql', '/m/2.sql'],

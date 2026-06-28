@@ -76,16 +76,61 @@ describe('classifyPredicate', () => {
     ['(select auth.uid()) = user_id', 'owner-bound'],
     ["auth.jwt() ->> 'sub' = user_id::text", 'owner-bound'],
     ['auth.uid() = user_id and deleted = false', 'owner-bound'],
-    // authenticated-only — THE gap
+    // owner-bound written the ways real Supabase migrations write it — casts on both operands, the CLI's
+    // `(select … as uid)` performance wrapper, whitespace — must stay owner-bound, never read as the gap.
+    ['auth.uid()::text = user_id::text', 'owner-bound'],
+    ['(select auth.uid() as uid) = user_id', 'owner-bound'],
+    ['user_id = (select auth.uid() as uid)', 'owner-bound'],
+    ['auth.uid () = user_id', 'owner-bound'],
+    // `auth.uid() IN (cols)` — a participant / multi-owner binding (chat sender/receiver, shared docs). An
+    // anon (null uid) is in no such list, so it is owner-bound, not an anon-satisfiable row-state predicate.
+    ['auth.uid() in (sender_id, receiver_id)', 'owner-bound'],
+    // authenticated-only — THE gap (proves a session exists, binds no row, gates on no specific role).
+    // Includes the Supabase `(select …)` performance wrapper, which the gap is just as often written with.
     ["auth.role() = 'authenticated'", 'authenticated-only'],
     ['auth.uid() is not null', 'authenticated-only'],
-    ["auth.jwt() ->> 'role' = 'admin'", 'authenticated-only'],
+    ['(select auth.uid()) is not null', 'authenticated-only'],
+    ["(select auth.role()) = 'authenticated'", 'authenticated-only'],
+    ['auth.jwt() is not null', 'authenticated-only'],
     // role-delegated — membership subquery (suppressed)
     [
       'tenant_id in (select tenant_id from memberships where user_id = auth.uid())',
       'role-delegated',
     ],
     ['exists (select 1 from team_members m where m.user_id = auth.uid())', 'role-delegated'],
+    // role-delegated — a gate on a SPECIFIC role or JWT claim RESTRICTS access to that role; an anon caller
+    // can never satisfy it, so it is neither the gap NOR anon-satisfiable (kept distinct from `unknown` so
+    // anon-writable does not fire on it). Field-validated: ~47% of this rule's FPs were `service_role`.
+    ["auth.role() = 'service_role'", 'role-delegated'],
+    ["'service_role' = auth.role()", 'role-delegated'],
+    ["auth.role() = 'admin'", 'role-delegated'],
+    ["(select auth.role()) = 'service_role'", 'role-delegated'], // select-wrapped role restriction
+    ["(select auth.role())::text = 'service_role'", 'role-delegated'], // wrapped + cast
+    ["auth.jwt() ->> 'role' = 'admin'", 'role-delegated'],
+    ["(auth.jwt() -> 'app_metadata' ->> 'claims_admin')::boolean = true", 'role-delegated'],
+    ["auth.jwt() ? 'service_role'", 'role-delegated'], // jsonb key-exists role check
+    ["(select auth.jwt()) -> 'app_metadata' ->> 'role' = 'admin'", 'role-delegated'], // wrapped claim gate
+    // role-delegated — PostgreSQL quoted-identifier forms (pg_dump / declarative `supabase/schemas`) and the
+    // identity-function role gates. An anon caller can never satisfy any of these.
+    [`("auth"."role"() = 'service_role'::"text")`, 'role-delegated'],
+    [`(("auth"."jwt"() ->> 'role'::"text") = 'service_role'::"text")`, 'role-delegated'],
+    ["current_user = 'service_role'", 'role-delegated'],
+    ["current_setting('role', true) = 'service_role'", 'role-delegated'],
+    // authenticated-only — a disjunction that re-widens to EVERY authenticated user is still the gap, even
+    // though one arm is a role gate (SESSION_PROOF is checked before the role/claim gate, COR/SEC ordering).
+    ["auth.role() = 'service_role' or auth.uid() is not null", 'authenticated-only'],
+    // quoted-identifier forms of owner-bound and the gap must still resolve correctly (declarative schemas).
+    [`"auth"."uid"() = "user_id"`, 'owner-bound'],
+    [`("auth"."role"() = 'authenticated'::"text")`, 'authenticated-only'],
+    [`(( select "auth"."uid"() as "uid") = "id")`, 'owner-bound'], // quoted (select … as "uid") wrapper
+    // quoted CUSTOM functions / identity functions delegate the decision and an anon cannot satisfy them.
+    [`"public"."is_admin"("auth"."uid"())`, 'function-delegated'],
+    [`("org_id" = any ("public"."get_user_org_ids"()))`, 'function-delegated'],
+    [`("organization_id" = ("current_setting"('app.org', true))::uuid)`, 'role-delegated'],
+    // unknown — `auth.uid() IS NULL` is an ANON test (the caller is NOT logged in), the opposite of a session
+    // proof; an owner binding wrapped in `coalesce(…)` is not a clean session proof. Both anon-satisfiable.
+    ["auth.uid() is null and status = 'published'", 'unknown'],
+    ["user_id = coalesce(auth.uid()::text, 'dev@example.com')", 'unknown'],
     // function-delegated — custom predicate function (suppressed)
     ['has_access(id)', 'function-delegated'],
     ['public.is_member(org_id)', 'function-delegated'],
@@ -100,12 +145,11 @@ describe('classifyPredicate', () => {
     ["note = 'see auth.role()'", 'unknown'],
     // COR-01 — the JWT/claim accessor literal still survives masking, so owner-bound is preserved
     ["auth.jwt() ->> 'sub' = user_id", 'owner-bound'],
-    ["auth.jwt() ->> 'role' = 'admin'", 'authenticated-only'],
-    // COR-02 — a bare numeric/literal on the column side is NOT an ownership comparison, so it falls
-    // through to authenticated-only (mentions auth, binds no column) instead of being mistaken owner-bound
-    // (the genuine column comparison `auth.uid() = user_id` is pinned owner-bound above).
-    ['auth.uid() = 1', 'authenticated-only'],
-    ["auth.uid() = 'literal'", 'authenticated-only'],
+    // COR-02 — a bare numeric/literal on the column side is NOT an ownership comparison; it is also not a
+    // session proof, so it is suppressed as `unknown` (never silently treated as owner-bound — the genuine
+    // column comparison `auth.uid() = user_id` is pinned owner-bound above).
+    ['auth.uid() = 1', 'unknown'],
+    ["auth.uid() = 'literal'", 'unknown'],
   ];
 
   for (const [expr, expected] of cases) {
@@ -153,8 +197,24 @@ describe('classifyPredicate', () => {
       expect(classifyPredicate("auth.jwt() ->> 'sub' = user_id::text")).toBe('owner-bound');
     });
 
-    it("keeps a JWT role claim authenticated-only (auth.jwt() ->> 'role' = 'admin')", () => {
-      expect(classifyPredicate("auth.jwt() ->> 'role' = 'admin'")).toBe('authenticated-only');
+    it('classifies a role/claim gate as role-delegated (not the gap, not anon-satisfiable)', () => {
+      // A role/claim gate RESTRICTS access to that role — not "every authenticated user reads every row" —
+      // so it is not a session proof. It stays `role-delegated` (distinct from `unknown`) so anon-writable
+      // never treats it as an anon-satisfiable row-state predicate. The genuine gap still fires.
+      expect(classifyPredicate("auth.role() = 'service_role'")).toBe('role-delegated');
+      expect(classifyPredicate("auth.jwt() ->> 'role' = 'admin'")).toBe('role-delegated');
+      expect(classifyPredicate("auth.jwt() ? 'service_role'")).toBe('role-delegated');
+      expect(classifyPredicate("auth.role() = 'authenticated'")).toBe('authenticated-only');
+      expect(classifyPredicate('(select auth.uid()) is not null')).toBe('authenticated-only');
+      // The disjunction is the gap despite a service_role arm (SESSION_PROOF precedes the role gate).
+      expect(classifyPredicate("auth.role() = 'service_role' or auth.uid() is not null")).toBe(
+        'authenticated-only',
+      );
+      // SEC: a `"` inside a KEPT role literal must not be stripped into a false `'authenticated'` match.
+      // `maskForClassification` never keeps a `"`, so `'authentic"ated'` (a value no real role has) stays a
+      // suppressed role restriction, not the gap — defending the global double-quote strip from forging the
+      // SESSION_PROOF keyword.
+      expect(classifyPredicate(`auth.role() = 'authentic"ated'`)).toBe('role-delegated');
     });
 
     it('an apostrophe inside a comment does not suppress real auth code that follows it', () => {
@@ -196,6 +256,20 @@ describe('classifyPredicate', () => {
       expect(cls).toBe('unknown');
       // The wall-clock smoke-check stays strict normally but tolerates v8 coverage overhead; even the
       // relaxed ceiling is orders of magnitude below the seconds an O(n²) regression would cost here.
+      const budgetMs = process.env['VITEST_COVERAGE'] === '1' ? 2000 : 150;
+      expect(elapsed).toBeLessThan(budgetMs);
+    });
+
+    it('does not blow up on a quote-dense literal (the masking regexes, not just the bounded ones)', () => {
+      // Regression for a real O(n²) ReDoS: the cap once ran AFTER maskForClassification, so a crafted
+      // single-quote-dense literal hit the masking regexes' ambiguous `(?:[^']|'')*` first — ~18s at 120 KB.
+      // The raw-length cap now gates BEFORE masking (and the literals use the unrolled-loop form), so a
+      // crafted `USING(…)` body is suppressed fail-secure in microseconds instead of hanging the scanner.
+      const evil = `auth.jwt() ->> '${"''".repeat(60_000)}'`;
+      const start = performance.now();
+      const cls = classifyPredicate(evil);
+      const elapsed = performance.now() - start;
+      expect(cls).toBe('unknown');
       const budgetMs = process.env['VITEST_COVERAGE'] === '1' ? 2000 : 150;
       expect(elapsed).toBeLessThan(budgetMs);
     });

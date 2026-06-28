@@ -41,6 +41,7 @@ jobs:
           echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' >> .npmrc
 
       - name: Create the Version Packages PR, or publish when it merges
+        id: changesets
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
         with:
           version: pnpm version-packages
@@ -53,3 +54,17 @@ jobs:
           # Supply-chain provenance: the repo is public and id-token: write is granted, so every
           # published package carries a signed attestation linking it to this commit and workflow run.
           NPM_CONFIG_PROVENANCE: "true"
+
+      # Software Bill of Materials for the version just published — a CycloneDX SBOM of the full (pnpm)
+      # dependency tree, so an enterprise consumer can audit exactly what they pull in. Only on a real
+      # publish; uploaded as a retained, downloadable artifact alongside the npm provenance above.
+      - name: Generate CycloneDX SBOM
+        if: steps.changesets.outputs.published == 'true'
+        run: pnpm dlx @cyclonedx/cdxgen@11 --type pnpm --output sbom.cdx.json --no-recurse
+      - name: Upload SBOM
+        if: steps.changesets.outputs.published == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom
+          path: sbom.cdx.json
+          retention-days: 90

@@ -10,7 +10,7 @@
 
 Built for developers shipping fast — including with AI coding agents — who don't want to become security experts to be reasonably safe. Add one middleware file and one env module and you get the security controls vibe-coded apps almost always miss.
 
-> **Honest scope.** No tool "completely protects" a web service, and any product that claims to is dangerous — it makes you stop paying attention. Aegis **automates the common, high-impact controls** (security headers/CSP, rate limiting, input validation, CSRF, secrets hygiene, secure defaults) and **scans for the risks it can't auto-fix** (broken authorization/IDOR, business-logic flaws). It dramatically reduces real risk and **complements** secure design — it does not replace it. It composes with your platform's network-layer WAF/bot protection; Aegis is the *application* layer.
+> **Honest scope.** No tool "completely protects" a web service, and any product that claims to is dangerous — it makes you stop paying attention. Aegis **automates the common, high-impact controls** (security headers/CSP, rate limiting, input validation, CSRF, secrets hygiene, secure defaults) and **scans for the risks it can't auto-fix** (broken authorization/IDOR, business-logic flaws). It dramatically reduces real risk and **complements** secure design — it does not replace it. It composes with your platform's network-layer WAF/bot protection; Aegis is the *application* layer. See the **[coverage matrix](docs/coverage.md)** for the exact rules, their analysis method, and what Aegis deliberately does *not* detect.
 
 ## Quick start
 

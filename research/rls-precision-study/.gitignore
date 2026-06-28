@@ -1,0 +1,7 @@
+# Transient study data — clones, per-repo scanner JSON, discovered repo lists, generated summary.
+# Never commit cloned third-party repositories or repo-identifying raw results (ethics + size + license).
+# Only the scripts, methodology (README.md), and the distilled, anonymized fixtures (committed under
+# packages/scanner/fixtures/sql/) are the durable artifacts.
+data/
+__pycache__/
+*.pyc

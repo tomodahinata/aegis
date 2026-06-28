@@ -67,6 +67,33 @@ jobs:
           path: coverage/
           retention-days: 14
 
+  # The scanner's precision/recall gate, surfaced as its OWN named check (the contract is also enforced
+  # inside `pnpm test` via gate.test.ts, but a dedicated job names "precision gate" when it breaks and
+  # publishes the precision/recall table to the run summary — an auditable, enterprise-facing artifact).
+  precision:
+    name: precision gate (zero false positives)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup
+      - name: Benchmark precision/recall over the labeled real-world corpus
+        run: pnpm --filter @aegiskit/scanner bench | tee bench-report.txt
+      - name: Precision/recall → job summary
+        if: ${{ !cancelled() }}
+        run: |
+          {
+            echo '### Scanner precision / recall (labeled real-world corpus)'
+            echo
+            echo '```'
+            cat bench-report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Enforce the gate — precision must stay 1.0, recall must not regress
+        run: pnpm --filter @aegiskit/scanner bench:check
+
   # CI-side Conventional Commits enforcement: lefthook only guards local commits, so contributors who
   # bypass hooks are still caught here. Reads the existing commitlint.config.mjs.
   commitlint:
