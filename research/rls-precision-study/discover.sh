@@ -26,7 +26,7 @@ for q in "${queries[@]}"; do
   for p in $(seq 1 "$PAGES"); do
     gh api -X GET search/code \
       -f q="$q" -f per_page=100 -f page="$p" \
-      --jq '.items[].repository.full_name' >> data/repos.raw.txt 2>>data/discover.err || true
+      --jq '.items[].repository | select(.fork == false) | .full_name' >> data/repos.raw.txt 2>>data/discover.err || true
     sleep 7   # code_search budget is 10 req/min; stay under it
   done
 done

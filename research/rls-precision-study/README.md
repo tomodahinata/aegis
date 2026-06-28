@@ -74,6 +74,41 @@ python3 research/rls-precision-study/aggregate.py
 `data/` (clones, per-repo scanner JSON, repo lists, generated summary) is `.gitignore`d — only the
 scripts, this methodology, and the distilled anonymized fixtures are committed.
 
+## Corpus design & sampling
+
+**Discovery.** `discover.sh` issues seven diversified GitHub *code-search* queries scoped to
+`path:supabase/migrations|schemas` (the predicate keywords vary — `create policy`, `enable row level
+security`, `auth.uid()`, `to authenticated`, `using (true)`, … — because one query caps at 1,000 results
+and many files map to one repo). Results are deduplicated to unique `owner/repo` and **forks are excluded**
+(`select(.fork == false)`; code search already skips forks by default). The 2026-06-28 run yielded
+**2,230** unique non-fork repositories.
+
+**Unit of analysis.** One repository. We clone shallow + sparse (only `supabase/migrations|schemas`),
+concatenate the SQL, and scan it. The denominator is **repos that ship RLS** — ≥ 1 `CREATE POLICY` grepped
+on the *checked-out SQL* as ground truth, **not** inferred from the search query. The numerator is repos
+with ≥ 1 `rls/policy-not-owner-scoped` finding.
+
+**Sampling.** Omitting `LIMIT` scans the whole pool (no sampling — preferred). With a `LIMIT`, `run.py`
+now draws a **seeded random** sample (`SAMPLE_SEED`, reproducible). ⚠️ **The 2026-06-28 run that the
+write-up cites predates this** and scanned the first 450 of the pool in alphabetical `owner/repo` order.
+Alphabetical order is plausibly independent of whether a developer scopes RLS to owners, so we treat it as
+an arbitrary (≈ random) 450 — but it is **not** a drawn random sample, and we disclose that rather than
+imply one.
+
+**Known selection biases (mixed directions — net is not assumed).**
+- *Keyword discovery* over-represents repos whose SQL contains those idioms. Some (`to authenticated`,
+  `auth.uid()`) also appear in *correct* owner-scoped policies, biasing the rate **down**; others
+  (`using (true)`) correlate with permissive policies, biasing **up** — but mostly a *different*, secondary
+  rule, not the 8.1% headline.
+- *Public-migration skew* (see Ethics): committing migrations to public GitHub selects for more careful
+  developers → the headline is a **lower bound**.
+
+**Reproducibility stance.** Scripts, queries, seed, and date are committed, so the **method** reproduces.
+The exact **population does not**: code-search results drift, and we deliberately do **not** commit the
+resolved repo list (naming scanned repos conflicts with the anonymity caveat below). A re-run yields a
+fresh population — and may surface new false-positive shapes that must be audited back to `precision = 1.0`
+before any new rate is published.
+
 ## Ethics & honest caveats
 
 - **Static, public-source only.** Computed from migration SQL (the authoritative schema) of public
@@ -87,3 +122,23 @@ scripts, this methodology, and the distilled anonymized fixtures are committed.
   — verify this is intended*; that is why the rule is medium severity and non-blocking.
 - Aegis **never claims to find every vulnerability**. See [`docs/coverage.md`](../../docs/coverage.md) for
   exactly what it detects and what it deliberately does not.
+
+## Responsible disclosure
+
+This study reads only SQL already public, names no repository, and contacts no running system — so it
+creates no new exposure and raises no unauthorized-access concern. The posture reflects that the headline
+finding is **medium / "verify intent," not a confirmed exploit**:
+
+- **Reporting a real issue (inbound).** Security reports for Aegis or this study go through
+  [`SECURITY.md`](../../.github/SECURITY.md) (private advisory) — never a public issue.
+- **"Am I in the data?" / "Scan mine."** Aggregate results cannot be deanonymized. Anyone can check their
+  own app in seconds with `npx @aegiskit/cli scan`, which runs **entirely locally** and contacts no
+  deployed app. That is the safe, self-serve path — we never probe a third party's live endpoints without
+  written authorization.
+- **Proactive notification.** Because the finding is medium and often *intended* (shared/lookup tables),
+  blanket-contacting flagged repos would be mostly noise and reads as unsolicited; we publish
+  aggregate-only and keep the self-check + private channel open, reserving direct, coordinated outreach for
+  any case that is unambiguously high-harm.
+- **Hard rules (non-negotiable).** No live probing of third-party systems without written authorization;
+  no deanonymization; the resolved repo list is never published; we never claim exploitation we did not
+  confirm.

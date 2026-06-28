@@ -14,6 +14,7 @@ Build it first:  pnpm --filter @aegiskit/cli build
 import csv
 import json
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -48,9 +49,20 @@ def run(cmd, timeout):
         return None
 
 
-repos = [l.strip() for l in (DATA / "repos.txt").read_text().splitlines() if l.strip()]
+# Candidate pool from discover.sh (one repo per line, deduped).
+pool = [s.strip() for s in (DATA / "repos.txt").read_text().splitlines() if s.strip()]
+
+# Sampling. Prefer scanning the WHOLE pool (omit LIMIT) so there is no sampling
+# bias at all. When a LIMIT is given, take a SEEDED RANDOM sample, not the first
+# N — ordering in repos.txt is alphabetical by owner/repo, which, while plausibly
+# independent of RLS design, is not a random sample and reads as selection bias.
+# The seed makes the draw reproducible. (The 2026-06-28 run that the write-up
+# cites predates this and used the first-N-by-name ordering; see README
+# "Corpus design & sampling".)
+SEED = int(os.environ.get("SAMPLE_SEED", "20260628"))
+repos = pool if LIMIT >= len(pool) else random.Random(SEED).sample(pool, LIMIT)
 rows_path = DATA / "rows.csv"
-total = min(LIMIT, len(repos))
+total = len(repos)
 
 with open(rows_path, "w", newline="") as fh:
     w = csv.writer(fh)
@@ -60,8 +72,6 @@ with open(rows_path, "w", newline="") as fh:
         + ["status"]
     )
     for i, repo in enumerate(repos):
-        if i >= LIMIT:
-            break
         key = repo.replace("/", "__")
         d = CLONES / key
         if d.exists():
