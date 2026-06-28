@@ -15,7 +15,7 @@ import { ts } from './ast';
  * safe for a URL but not for SQL, while `Number()` makes it safe everywhere. Set membership, not a
  * sanitizer×sink matrix (KISS).
  */
-export type SinkCategory = 'sql' | 'html' | 'url' | 'fs-path' | 'shell' | 'code';
+export type SinkCategory = 'sql' | 'html' | 'url' | 'fs-path' | 'shell' | 'code' | 'redos';
 
 export const ALL_SINK_CATEGORIES: ReadonlySet<SinkCategory> = new Set<SinkCategory>([
   'sql',
@@ -24,6 +24,11 @@ export const ALL_SINK_CATEGORIES: ReadonlySet<SinkCategory> = new Set<SinkCatego
   'fs-path',
   'shell',
   'code',
+  // `redos` is special: no *content* sanitizer fixes it (escaping a string does not stop a catastrophic
+  // regex). Only the two universal sanitizers neutralize it — a numeric cast (a number can't trigger
+  // backtracking) and a constrained schema-parse — which is the fail-secure direction (prefer a missed
+  // length-bounded case to a false positive). The fix is always the regex, never the input.
+  'redos',
 ]);
 
 /** A source of untrusted input — an expression node that introduces taint. */

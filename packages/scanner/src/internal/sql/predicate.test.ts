@@ -65,6 +65,11 @@ describe('classifyPredicate', () => {
     ['true', 'unconditional'],
     ['(true)', 'unconditional'],
     ['TRUE', 'unconditional'],
+    // deny — literal `false`, the append-only/immutable idiom (`FOR UPDATE USING (false)`); satisfiable
+    // by no caller, so it must never be flagged as an anon-writable row-state gap.
+    ['false', 'deny'],
+    ['(false)', 'deny'],
+    ['FALSE', 'deny'],
     // owner-bound — the correct pattern (never flagged)
     ['auth.uid() = user_id', 'owner-bound'],
     ['user_id = auth.uid()', 'owner-bound'],
@@ -181,14 +186,18 @@ describe('classifyPredicate', () => {
   // REL-01: the call/owner-bound regexes are length-bounded and the masked string is capped, so an
   // adversarial multi-hundred-kilobyte predicate is suppressed fail-secure instead of hanging the scanner.
   describe('REL-01 — bounded cost on adversarial-length input', () => {
-    it('classifies a ~200k-char predicate well under 150ms (no O(n²) blowup)', () => {
+    it('classifies a ~200k-char predicate well under budget (no O(n²) blowup)', () => {
       const huge = `auth.uid() = user_id and ${'a'.repeat(200_000)}`;
       const start = performance.now();
       const cls = classifyPredicate(huge);
       const elapsed = performance.now() - start;
       // Past the cap the predicate is suppressed (fail-secure), not classified by the bounded regexes.
+      // This `unknown` assertion is the actual DoS guarantee and is unaffected by instrumentation.
       expect(cls).toBe('unknown');
-      expect(elapsed).toBeLessThan(150);
+      // The wall-clock smoke-check stays strict normally but tolerates v8 coverage overhead; even the
+      // relaxed ceiling is orders of magnitude below the seconds an O(n²) regression would cost here.
+      const budgetMs = process.env['VITEST_COVERAGE'] === '1' ? 2000 : 150;
+      expect(elapsed).toBeLessThan(budgetMs);
     });
 
     it('still classifies an owner-bound predicate that sits just under the cap', () => {

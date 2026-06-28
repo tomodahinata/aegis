@@ -415,6 +415,27 @@ describe('scanSql — rls/anon-writable (anon can modify/delete existing rows)',
     expect(ids).toContain(RULE);
     expect(ids).toContain('rls/permissive-write-policy');
   });
+
+  // Regression: a `USING (false)` deny-all policy is the append-only/immutable idiom — satisfiable by no
+  // caller, so it is the SAFEST design, not a row-state gap. It was false-flagged HIGH on real audit-log
+  // tables (`for update using(false)`) until `classifyPredicate` learned the `'deny'` class.
+  it('does NOT flag a deny-all UPDATE policy (USING (false) — immutable table)', () => {
+    expect(
+      ruleIds(
+        `${table}
+         create policy "no_update" on public.jobs for update using (false) with check (false);`,
+      ),
+    ).not.toContain(RULE);
+  });
+
+  it('does NOT flag a deny-all DELETE policy (USING (false) — append-only table)', () => {
+    expect(
+      ruleIds(
+        `${table}
+         create policy "no_delete" on public.jobs for delete using (false);`,
+      ),
+    ).not.toContain(RULE);
+  });
 });
 
 describe('scanSql — final-state migration semantics (DROP/ALTER supersede, no stale FPs)', () => {

@@ -1,0 +1,89 @@
+name: Security
+
+# Defense in depth for the toolkit itself: dependency CVEs (OSV report + audit gate), secret scanning
+# (gitleaks), and dogfooding — Aegis scans its own apps with its own scanner. Results land in the
+# Security tab. The weekly schedule re-checks unchanged code against newly-published advisories.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1"
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Report EVERY dependency advisory (OSV.dev DB) to code scanning for triage. Report-only: the
+  # moderate build-chain advisories must not wall off unrelated PRs — `audit` below is the hard gate.
+  osv:
+    name: dependency CVEs (OSV · report)
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    with:
+      scan-args: |-
+        --lockfile=./pnpm-lock.yaml
+      fail-on-vuln: false
+
+  # Hard gate: fail only on HIGH/CRITICAL dependency advisories (none today). Moderate/low surface via
+  # OSV + Dependabot for triage without blocking merges.
+  audit:
+    name: dependency CVEs (audit · gate, high+)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup
+      - run: pnpm audit --audit-level=high
+
+  # Secret scanning. gitleaks is free for personal/public repos (GITLEAKS_LICENSE is org-only). The
+  # allowlist for the intentional fixture/test secrets lives in .gitleaks.toml; verified to 0 hits.
+  gitleaks:
+    name: secret scanning (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # scan the full history, not just the tip
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_ENABLE_COMMENTS: "false" # job failure + summary is enough; keeps perms read-only
+
+  # Dogfooding: scan the real apps with the freshly-built CLI. apps/ holds dashboard + demo and no
+  # intentional-vuln corpus, so this gates honestly at HIGH (verified clean). SARIF → Security tab.
+  dogfood:
+    name: dogfood (Aegis scans Aegis)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup
+      - run: pnpm build
+      - name: Scan apps/ with the built CLI
+        run: node packages/cli/dist/main.js ci apps --severity HIGH --sarif-out aegis.sarif --annotations
+      - name: Upload Aegis SARIF
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        with:
+          sarif_file: aegis.sarif
+          category: aegis-self-scan

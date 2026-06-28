@@ -1,19 +1,53 @@
-# Deterministic enforcement at the git boundary (the "must happen" lever).
+# Deterministic enforcement at the git boundary — the local mirror of CI, so a failing gate is caught
+# here instead of burning CI minutes. Two tiers, by cost vs. frequency:
+#   • pre-commit — fast, scoped to staged files, proactive (a leaked secret must never enter history).
+#   • pre-push   — full CI parity: the exact gates ci.yml runs, since push is the "about to use CI" moment.
+# The pnpm gates always run; the system tools (gitleaks, actionlint) degrade gracefully when a
+# contributor hasn't installed them — CI remains the hard backstop, so nothing is silently lost.
+
 pre-commit:
   parallel: true
   commands:
+    # Format + lint + import-sort the staged files, auto-fixing in place. Full-tree `biome ci` runs at
+    # push time; this is the fast, staged subset with autofix so commits stay clean effortlessly.
     biome:
       glob: '*.{ts,tsx,js,jsx,json,jsonc}'
       run: pnpm biome check --write --no-errors-on-unmatched {staged_files}
       stage_fixed: true
 
+    # Scan the staged diff for secrets. A secret in history is effectively unfixable (rotate + rewrite),
+    # so we stop it before the commit; GitHub push protection and the CI gitleaks job are only backstops.
+    gitleaks:
+      run: |
+        if command -v gitleaks >/dev/null 2>&1; then
+          gitleaks git --staged --no-banner --redact --config .gitleaks.toml
+        else
+          echo "ℹ gitleaks not installed — skipping local secret scan (CI still enforces). Install: https://github.com/gitleaks/gitleaks#installing"
+        fi
+
+    # Lint workflow YAML, but only when a workflow actually changed (scoped, so most commits skip it).
+    actionlint:
+      glob: ".github/workflows/*.{yml,yaml}"
+      run: |
+        if command -v actionlint >/dev/null 2>&1; then
+          actionlint {staged_files}
+        else
+          echo "ℹ actionlint not installed — skipping workflow lint (CI still enforces). Install: https://github.com/rhysd/actionlint"
+        fi
+
 pre-push:
   parallel: true
   commands:
+    # The exact gates ci.yml runs, so a red push never reaches CI. Turbo caches build/typecheck (a no-op
+    # push is near-instant); test:coverage enforces the same per-package ratchet thresholds as CI.
+    lint:
+      run: pnpm lint:ci
     typecheck:
-      run: pnpm turbo run typecheck
+      run: pnpm typecheck
+    build:
+      run: pnpm build
     test:
-      run: pnpm test
+      run: pnpm test:coverage
 
 commit-msg:
   commands:

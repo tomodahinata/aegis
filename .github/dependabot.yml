@@ -1,0 +1,31 @@
+version: 2
+
+updates:
+  # Application/dev dependencies (pnpm workspace, read from the root lockfile). Grouped so routine
+  # minor/patch bumps arrive as one PR instead of dozens; majors still come through individually.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+
+  # Keep the SHA-pinned actions fresh: Dependabot bumps the pinned SHA *and* the `# vX.Y.Z` comment.
+  # Pin for safety, Dependabot for freshness — including the local composite at .github/actions/setup.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      actions:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "ci"

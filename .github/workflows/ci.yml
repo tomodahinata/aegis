@@ -11,32 +11,75 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Least privilege: CI only reads the repo.
+# Least privilege: CI only reads the repo. Scan workflows (codeql/security/scorecard) request the
+# extra scopes they need; this one never writes.
 permissions:
   contents: read
 
 jobs:
-  verify:
-    name: build · typecheck · test · lint
+  # Static gates, split into named steps so a red check names the gate that broke. typecheck/test
+  # resolve `@aegiskit/*` to `src` (the dev condition); build proves the published `dist` compiles.
+  quality:
+    name: lint · typecheck · build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      # pnpm before setup-node, so setup-node's pnpm cache can resolve the store. Version comes from
-      # the root package.json `packageManager` field (single source of truth).
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
         with:
-          node-version: 24
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      # The same gates as the local `pnpm verify`, split into steps so a failure names the gate that
-      # broke. typecheck/test resolve `@aegiskit/*` to `src` (the dev condition); build proves the
-      # published `dist` artifacts compile.
-      - run: pnpm build
+          egress-policy: audit
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup
+      - run: pnpm lint:ci
       - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm lint
+      - run: pnpm build
+      # Lint the workflow YAML itself (syntax, shellcheck on run: blocks, deprecated patterns).
+      - name: Lint workflows
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
+
+  # Tests + the coverage ratchet. vitest enforces the per-package floors; a regression fails here.
+  test:
+    name: test · coverage ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/setup
+      - run: pnpm test:coverage
+      - name: Coverage → job summary
+        if: ${{ !cancelled() }}
+        run: |
+          # shellcheck disable=SC2016  # the ${...} below are JS template expressions, not shell
+          node --input-type=module -e '
+            import { readFileSync, appendFileSync } from "node:fs";
+            const t = JSON.parse(readFileSync("coverage/coverage-summary.json", "utf8")).total;
+            const row = (k) =>
+              `| ${k[0].toUpperCase() + k.slice(1)} | ${t[k].pct}% (${t[k].covered}/${t[k].total}) |`;
+            const md = ["### Coverage (total)", "", "| Metric | Coverage |", "|---|---|",
+              ...["statements", "branches", "functions", "lines"].map(row), ""].join("\n");
+            appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n`);
+          '
+      - name: Upload coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14
+
+  # CI-side Conventional Commits enforcement: lefthook only guards local commits, so contributors who
+  # bypass hooks are still caught here. Reads the existing commitlint.config.mjs.
+  commitlint:
+    name: commit messages
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # commitlint needs the full PR commit range
+      - uses: wagoid/commitlint-github-action@b948419dd99f3fd78a6548d48f94e3df7f6bf3ed # v6.2.1
+        with:
+          configFile: commitlint.config.mjs

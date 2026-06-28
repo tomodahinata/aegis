@@ -1,0 +1,6 @@
+# Force every report through a template; vulnerabilities go to the private advisory channel.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/tomodahinata/aegis/security/advisories/new
+    about: Never file security issues publicly — disclose them privately here.

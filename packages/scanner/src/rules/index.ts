@@ -10,7 +10,10 @@ import { publicSecret, secretInClient } from './env';
 import { missingSecurityHeaders } from './headers';
 import { openRedirect } from './open-redirect';
 import { pathTraversal } from './path-traversal';
+import { postMessageOriginMissing } from './postmessage';
 import { missingRateLimitOnAi } from './ratelimit';
+import { redos, redosQuadratic } from './redos';
+import { incompleteEscape } from './sanitize';
 import { committedSecretLiteral } from './secrets';
 import { sqlInjection } from './sql-injection';
 import { ssrf } from './ssrf';
@@ -28,6 +31,7 @@ export const ALL_RULES: readonly Rule[] = [
   secretInClient,
   serviceRoleOutsideAdmin,
   missingOriginCheck,
+  postMessageOriginMissing,
   dangerousHtmlUnsanitized,
   committedSecretLiteral,
   // Injection family (dataflow / taint).
@@ -38,6 +42,9 @@ export const ALL_RULES: readonly Rule[] = [
   commandInjection,
   openRedirect,
   codeInjection,
+  redos,
+  redosQuadratic,
+  incompleteEscape,
   // Cryptographic weaknesses (syntactic).
   insecureRandomness,
   weakHash,
@@ -56,6 +63,7 @@ export {
   dangerousHtmlUnsanitized,
   domXss,
   idorTaintedScope,
+  incompleteEscape,
   insecureRandomness,
   missingAccessFilter,
   missingOriginCheck,
@@ -64,7 +72,10 @@ export {
   nonConstantTimeCompare,
   openRedirect,
   pathTraversal,
+  postMessageOriginMissing,
   publicSecret,
+  redos,
+  redosQuadratic,
   secretInClient,
   serviceRoleOutsideAdmin,
   sqlInjection,

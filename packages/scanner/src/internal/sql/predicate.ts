@@ -21,6 +21,10 @@ export type PredicateClass =
   | 'absent'
   // Literally `true` — unconditional. Owned by `permissiveWritePolicy` / intentional reference reads.
   | 'unconditional'
+  // Literally `false` — deny-all. No caller (anon or authenticated) can ever satisfy it, so it is the
+  // *safest* possible predicate: the idiom for an append-only/immutable table (`FOR UPDATE USING (false)`).
+  // A distinct class so the "anon can mutate" rule skips it instead of mistaking it for a row-state gap.
+  | 'deny'
   // An auth identity (auth.uid()/auth.jwt()->>'sub') compared to a column — the CORRECT pattern.
   | 'owner-bound'
   // Proves the caller is authenticated but binds no row to them — THE gap this feature closes.
@@ -386,6 +390,12 @@ export function classifyPredicate(expr: string | undefined): PredicateClass {
   }
   if (/^\(*\s*true\s*\)*$/.test(normalized)) {
     return 'unconditional';
+  }
+  // `false` is deny-all: no row ever satisfies it, so it grants nothing to anyone. Classified before the
+  // auth/owner regexes (which it can't match anyway) so `USING (false)` on an immutable table is never
+  // mistaken for an unclassifiable row-state predicate and flagged as anon-writable.
+  if (/^\(*\s*false\s*\)*$/.test(normalized)) {
+    return 'deny';
   }
   // Before anything else: a custom function call makes the predicate unverifiable (it may well be a
   // correct multi-tenant check). Suppress. Checked first so `has_access(id) AND auth.uid() IS NOT NULL`

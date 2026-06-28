@@ -214,8 +214,10 @@ export const anonWritablePolicy: SqlRule = {
       if (exposedRoles.length === 0) {
         continue;
       }
-      // An unconditional `true` in the USING predicate is already reported by `permissiveWritePolicy`;
-      // flag the gap it misses — a row-state-only predicate an anonymous caller can satisfy.
+      // Flag only the gap `permissiveWritePolicy` misses: a row-state-only predicate (`'unknown'`) an
+      // anonymous caller can satisfy. Every other class is handled or safe — `'unconditional'` (`true`) is
+      // `permissiveWritePolicy`'s; `'deny'` (`false`) can be satisfied by no one (immutable table);
+      // owner/auth/delegated bind the caller — so anything but `'unknown'` is skipped here.
       if (effectivePolicyClass(policy) !== 'unknown') {
         continue;
       }

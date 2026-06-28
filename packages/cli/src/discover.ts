@@ -11,6 +11,10 @@ const SKIP_DIRS = new Set([
   'out',
   'build',
   '.vercel',
+  // Machine-generated / vendored output (Prisma client, GraphQL codegen, protobuf, …). It is not
+  // authored source the developer can fix, and its minified/wasm blobs trip high-entropy secret
+  // heuristics — scanning it is pure false-positive surface, exactly like `dist`/`build`.
+  'generated',
 ]);
 const SOURCE_EXT = /\.(?:ts|tsx|js|jsx|mjs|cjs)$/;
 const SKIP_FILE = /\.d\.ts$|\.(?:test|spec)\./;
@@ -52,11 +56,17 @@ export function defaultAliases(root: string): Record<string, string> | undefined
   return existsSync(src) ? { '@/': `${src}/` } : undefined;
 }
 
-// Only the SOURCE-OF-TRUTH schema is scanned: declarative `schemas/` and incremental `migrations/`.
-// Generated dumps (`schema-snapshot.sql`), pgTAP tests (`*.test.sql`, `tests/`), and seeds are NOT
-// the authority and would produce false positives (a dump duplicates the migrations; tests create
-// throwaway temp tables) — so they are excluded.
-const SQL_AUTHORITY_DIR = /[/\\](?:migrations|schemas)[/\\]/;
+// Only the SOURCE-OF-TRUTH *Supabase* schema is scanned: declarative `supabase/schemas/` and
+// incremental `supabase/migrations/`. The `supabase/` ancestor is load-bearing, not cosmetic: the RLS
+// rules' entire threat model is PostgREST exposing tables to the `anon`/`authenticated` roles over HTTP.
+// That risk exists ONLY behind Supabase. A Prisma/Drizzle Postgres app reached through a privileged
+// server-side connection has no such boundary, so a table without RLS is normal there — scanning its
+// `prisma/migrations/` would flag every CREATE TABLE as a false positive. Scoping to `supabase/` makes
+// the analysis fire exactly where its threat model holds (the product is, by definition, Supabase).
+// Generated dumps (`schema-snapshot.sql`), pgTAP tests (`*.test.sql`, `tests/`), and seeds are NOT the
+// authority and would produce false positives (a dump duplicates the migrations; tests create throwaway
+// temp tables) — so they are excluded.
+const SQL_AUTHORITY_DIR = /[/\\]supabase[/\\](?:migrations|schemas)[/\\]/;
 const SQL_NON_AUTHORITY = /\.test\.sql$|_test\.sql$|(?:^|[/\\])seed(?:s)?[./\\]/i;
 
 /** Collect source-of-truth Supabase schema `.sql` files (migrations + declarative schemas). */

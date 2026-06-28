@@ -1,6 +1,8 @@
 # 🛡️ Aegis
 
 [![CI](https://github.com/tomodahinata/aegis/actions/workflows/ci.yml/badge.svg)](https://github.com/tomodahinata/aegis/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/tomodahinata/aegis/actions/workflows/codeql.yml/badge.svg)](https://github.com/tomodahinata/aegis/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/tomodahinata/aegis/badge)](https://scorecard.dev/viewer/?uri=github.com/tomodahinata/aegis)
 [![npm](https://img.shields.io/npm/v/@aegiskit/cli?color=cb3837&logo=npm)](https://www.npmjs.com/package/@aegiskit/cli)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 

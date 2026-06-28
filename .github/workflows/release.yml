@@ -22,25 +22,26 @@ jobs:
     name: version or publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # audit (not block): the publish step must reach the npm registry; egress is logged for review.
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0 # changesets needs full history to compute the changelog
 
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+      # Shared pnpm + Node 24 + frozen install (see .github/actions/setup).
+      - uses: ./.github/actions/setup
 
       # pnpm substitutes ${NPM_TOKEN} from the publish step's env — the token is never written to disk.
       - name: Prepare npm auth
-        run: echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' >> .npmrc
+        run: |
+          # shellcheck disable=SC2016  # ${NPM_TOKEN} must reach .npmrc unexpanded; pnpm fills it at publish
+          echo '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' >> .npmrc
 
       - name: Create the Version Packages PR, or publish when it merges
-        uses: changesets/action@v1
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
         with:
           version: pnpm version-packages
           publish: pnpm release

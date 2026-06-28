@@ -1,0 +1,7 @@
+name: Aegis CodeQL
+
+# The scanner's vulnerable corpus is intentionally insecure — analyzing it would flood code scanning
+# with by-design findings. Everything else (packages + apps) stays in scope. Mirrors the gitleaks
+# allowlist and the dogfood scan's `apps`-only scope.
+paths-ignore:
+  - packages/scanner/fixtures

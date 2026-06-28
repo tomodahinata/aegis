@@ -1,0 +1,24 @@
+name: Feature request
+description: Propose a new control, scanner rule, or capability.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What security gap or friction are you hitting? Who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should Aegis do? For a scanner rule, give a vulnerable + a safe code sample.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

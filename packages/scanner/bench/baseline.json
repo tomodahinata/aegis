@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "overall": {
-    "tp": 29,
+    "tp": 33,
     "fp": 0,
     "fn": 0,
     "precision": 1,
@@ -71,6 +71,14 @@
       "f1": 1
     },
     "csrf/missing-origin-check": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1
+    },
+    "dom/postmessage-origin-missing": {
       "tp": 1,
       "fp": 0,
       "fn": 0,
@@ -150,6 +158,22 @@
       "recall": 1,
       "f1": 1
     },
+    "redos/quadratic-regex": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1
+    },
+    "redos/super-linear-regex": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1
+    },
     "rls/anon-table-grant": {
       "tp": 1,
       "fp": 0,
@@ -191,6 +215,14 @@
       "f1": 1
     },
     "rls/write-policy-without-check": {
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "precision": 1,
+      "recall": 1,
+      "f1": 1
+    },
+    "sanitize/incomplete-escape": {
       "tp": 1,
       "fp": 0,
       "fn": 0,
@@ -242,7 +274,7 @@
   "falseNegatives": [],
   "falsePositives": [],
   "corpus": {
-    "vulnDirs": 24,
-    "goodDirs": 35
+    "vulnDirs": 28,
+    "goodDirs": 39
   }
 }

@@ -1,0 +1,15 @@
+# Aegis is a secret scanner, so its fixtures and unit tests deliberately embed sample/fake secret
+# literals as detection vectors — scanning them only ever yields by-design hits. We extend gitleaks'
+# default ruleset and allowlist exactly those corpora; all product code (non-test `src`, `apps/`) is
+# still scanned in full. Same principle as the CodeQL `paths-ignore` for the vulnerable corpus.
+title = "Aegis gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Intentional test/fixture secrets — detection vectors, not real credentials."
+paths = [
+  '''packages/scanner/fixtures/.*''',
+  '''.*\.test\.(ts|tsx)$''',
+]

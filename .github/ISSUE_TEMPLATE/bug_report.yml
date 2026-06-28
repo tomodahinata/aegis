@@ -1,0 +1,37 @@
+name: Bug report
+description: A defect in an @aegiskit/* package (NOT a security vulnerability — see below).
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ⚠️ **Found a security vulnerability?** Do not file it here. Report it privately via
+        [Security Advisories](https://github.com/tomodahinata/aegis/security/advisories/new).
+  - type: input
+    id: package
+    attributes:
+      label: Affected package(s) and version
+      placeholder: "@aegiskit/scanner@0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Steps, a code snippet, or a link to a repo. The smaller, the faster we can help.
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Node version, package manager, OS, framework (Next.js/Supabase) versions.
+    validations:
+      required: false

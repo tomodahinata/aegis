@@ -41,6 +41,10 @@ export const TS_LABELS: readonly FixtureLabel[] = [
   { dir: 'command-injection', expect: ['injection/command'] },
   { dir: 'open-redirect', expect: ['redirect/open-redirect'] },
   { dir: 'code-injection', expect: ['injection/code'] },
+  { dir: 'redos-catastrophic', expect: ['redos/super-linear-regex'] },
+  { dir: 'redos-quadratic', expect: ['redos/quadratic-regex'] },
+  { dir: 'postmessage-no-origin', expect: ['dom/postmessage-origin-missing'] },
+  { dir: 'incomplete-escape', expect: ['sanitize/incomplete-escape'] },
   // Cryptographic weaknesses + authorization.
   { dir: 'weak-random-token', expect: ['crypto/insecure-randomness'] },
   { dir: 'weak-hash', expect: ['crypto/weak-hash'] },
