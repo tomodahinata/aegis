@@ -27,7 +27,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "eslint": "^9.0.0",
+    "eslint": "^10.6.0",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
