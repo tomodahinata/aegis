@@ -85,6 +85,16 @@ describe('classifyPredicate', () => {
     // `auth.uid() IN (cols)` — a participant / multi-owner binding (chat sender/receiver, shared docs). An
     // anon (null uid) is in no such list, so it is owner-bound, not an anon-satisfiable row-state predicate.
     ['auth.uid() in (sender_id, receiver_id)', 'owner-bound'],
+    // owner-bound via a case-insensitive identity match — `lower(col) = lower(auth.jwt() ->> 'email')`, the
+    // idiomatic email binding. A case-fold/trim wrapper (and the redundant parens it adds) is transparent
+    // to ownership. The redundant `auth.uid() IS NOT NULL` conjunct must NOT re-classify it as the gap.
+    // Field study: this exact shape was the one residual false positive on a fresh public corpus.
+    ["lower(email) = lower(auth.jwt() ->> 'email')", 'owner-bound'],
+    ["lower(email) = lower((auth.jwt() ->> 'email'))", 'owner-bound'],
+    ["auth.uid() is not null and lower(email) = lower((auth.jwt() ->> 'email'))", 'owner-bound'],
+    ["upper(handle) = upper(auth.jwt() ->> 'sub')", 'owner-bound'],
+    ['(user_id) = (auth.uid())', 'owner-bound'], // redundant grouping parens on both operands
+    // (`coalesce(auth.uid(), …)` stays `unknown` — it is NOT a transparent wrapper; asserted below.)
     // authenticated-only — THE gap (proves a session exists, binds no row, gates on no specific role).
     // Includes the Supabase `(select …)` performance wrapper, which the gap is just as often written with.
     ["auth.role() = 'authenticated'", 'authenticated-only'],
@@ -116,6 +126,11 @@ describe('classifyPredicate', () => {
     [`(("auth"."jwt"() ->> 'role'::"text") = 'service_role'::"text")`, 'role-delegated'],
     ["current_user = 'service_role'", 'role-delegated'],
     ["current_setting('role', true) = 'service_role'", 'role-delegated'],
+    // role-delegated — the LIST form `auth.role() IN (…specific roles…)`. An anon's role is never in such a
+    // list, so it must NOT be read as an anon-satisfiable row-state predicate (field FP: `anon-writable`
+    // fired on `WITH CHECK (auth.role() IN ('service_role', 'supabase_admin'))`).
+    ["auth.role() in ('service_role', 'supabase_admin')", 'role-delegated'],
+    ["auth.role() in ('admin', 'editor')", 'role-delegated'],
     // authenticated-only — a disjunction that re-widens to EVERY authenticated user is still the gap, even
     // though one arm is a role gate (SESSION_PROOF is checked before the role/claim gate, COR/SEC ordering).
     ["auth.role() = 'service_role' or auth.uid() is not null", 'authenticated-only'],
@@ -135,6 +150,13 @@ describe('classifyPredicate', () => {
     ['has_access(id)', 'function-delegated'],
     ['public.is_member(org_id)', 'function-delegated'],
     ['has_access(id) and auth.uid() is not null', 'function-delegated'],
+    // function-delegated — a CUSTOM `auth.*` schema helper (NOT auth.uid/jwt/role) is as unverifiable as any
+    // other custom function and an anon cannot satisfy it; it must be suppressed, not read as a row-state
+    // gap. Field FPs: `anon-writable` fired on `auth.is_admin()`, `auth.email()`, `auth.user_role() IN (…)`.
+    ['auth.is_admin()', 'function-delegated'],
+    ['email = auth.email()', 'function-delegated'],
+    ["auth.user_role() in ('admin', 'superadmin')", 'function-delegated'],
+    ['auth.org_id() = org_id', 'function-delegated'],
     // unknown — no recognizable scoping (suppressed)
     ['is_public', 'unknown'],
     ["status = 'published'", 'unknown'],

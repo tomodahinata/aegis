@@ -57,3 +57,35 @@ create policy "audit_owner_read" on public.audit_log for select to authenticated
   using (auth.uid() = user_id);
 create policy "audit_backend_write" on public.audit_log for all
   using (auth.role() = 'service_role') with check (auth.role() = 'service_role');
+
+-- (7) Owner-bound via a CASE-INSENSITIVE email identity match — `lower(email) = lower(auth.jwt() ->>
+--     'email')`, the idiomatic invitee-can-read-their-own-invite shape. The row IS scoped to the caller;
+--     the case-fold wrapper just defeats a naive owner-bound regex, and the redundant `auth.uid() IS NOT
+--     NULL` conjunct then looks like the gap. This was the single residual false positive surfaced by a
+--     FRESH public-corpus run (an independent seed, not the pinned corpus) — locked here so it cannot regress.
+create table public.tenant_invitations (id uuid primary key, email text not null, status text, expires_at timestamptz);
+alter table public.tenant_invitations enable row level security;
+create policy "ti_self_email_peek" on public.tenant_invitations for select to authenticated
+  using (
+    auth.uid() is not null
+    and lower(email) = lower((auth.jwt() ->> 'email'))
+    and status = 'pending'
+    and expires_at > now()
+  );
+
+-- (8) Write policies gated by a CUSTOM `auth.*` schema helper (`auth.is_admin()`, `auth.user_role()`) and by
+--     the LIST form `auth.role() IN (…)`. An anon can satisfy NONE of these — the helper needs a session and
+--     the role list excludes `anon` — so `rls/anon-writable` must NOT fire. (Reads stay owner-scoped.) These
+--     two shapes were `anon-writable` false positives on the public corpus: a custom `auth.*` helper fell
+--     through to a row-state predicate, and `auth.role() IN (…)` was not recognized as a role gate.
+create table public.festivals (id uuid primary key, owner_id uuid not null, name text);
+alter table public.festivals enable row level security;
+create policy "festivals_owner_read" on public.festivals for select to authenticated
+  using (auth.uid() = owner_id);
+create policy "festivals_admin_write" on public.festivals for insert
+  with check (auth.is_admin());
+create policy "festivals_role_manage" on public.festivals for update
+  using (auth.role() in ('service_role', 'supabase_admin'))
+  with check (auth.role() in ('service_role', 'supabase_admin'));
+create policy "festivals_app_role_write" on public.festivals for delete
+  using (auth.user_role() in ('ADMIN', 'SUPERADMIN'));

@@ -39,6 +39,24 @@ interface MutableFileInfo {
   suppressions: FileSuppressions;
 }
 
+/**
+ * A module the browser bundle can never include — a hard server/client boundary proven by Next.js's
+ * build contract (not a filename guess), so it and any subtree reachable only through it are excluded
+ * from client reachability. Two kinds:
+ *   - `import 'server-only'` — Next throws at build if such a module is bundled for the browser; and
+ *   - a `"use server"` Server Actions module — a Client Component importing it compiles to an RPC
+ *     stub, so the module body and its entire import subtree stay on the server (every export is an
+ *     async server function). Omitting this barrier flagged secrets behind the idiomatic Client
+ *     Component → Server Action → server-lib chain (e.g. `getStripe()` reading `STRIPE_SECRET_KEY`)
+ *     as client-reachable — a false positive, since that code never reaches the browser bundle.
+ */
+function isClientBundleBarrier(info: MutableFileInfo): boolean {
+  return (
+    info.classification.isServerAction ||
+    (info.text.includes('server-only') && importsServerOnly(info.sourceFile))
+  );
+}
+
 export function scan(options: ScanOptions): ScanResult {
   const started = Date.now();
   const read = options.readFile ?? ((path: string) => readFileSync(path, 'utf8'));
@@ -76,8 +94,8 @@ export function scan(options: ScanOptions): ScanResult {
   }
 
   // 2. Resolve internal import edges, then mark everything reachable from a Client Component.
-  // A `server-only` module can never be client-bundled (Next throws at build), so it is a
-  // barrier: excluded from reachability along with any subtree reachable only through it.
+  // A module that the browser bundle can never include is a barrier: excluded from reachability
+  // along with any subtree reachable only through it (see `isClientBundleBarrier`).
   const known = new Set(infos.keys());
   const graph = new Map<string, GraphNode>();
   const barriers = new Set<string>();
@@ -90,7 +108,7 @@ export function scan(options: ScanOptions): ScanResult {
       }
     }
     graph.set(info.path, { path: info.path, importsResolved: resolved });
-    if (info.text.includes('server-only') && importsServerOnly(info.sourceFile)) {
+    if (isClientBundleBarrier(info)) {
       barriers.add(info.path);
     }
   }

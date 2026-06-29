@@ -64,6 +64,36 @@ describe('scanner — fixed false negatives', () => {
   });
 });
 
+describe('scanner — "use server" Server Actions are a client-bundle barrier', () => {
+  const billing = '/app/billing.ts';
+  const action = '/app/lib/action.ts';
+  const form = '/app/form.tsx';
+  const sources: Record<string, string> = {
+    [billing]: 'export const getStripe = () => process.env.STRIPE_SECRET_KEY ?? "";',
+    [form]:
+      "'use client';\nimport { charge } from './lib/action';\nexport const F = () => (typeof charge === 'function' ? 'y' : 'n');",
+  };
+  const scanWith = (actionSource: string): string[] =>
+    scan({
+      files: [billing, action, form],
+      readFile: (p) => ({ ...sources, [action]: actionSource })[p] ?? '',
+    }).findings.map((f) => f.ruleId);
+
+  it('does NOT flag a secret reached only through a Server Action (RPC, never client-bundled)', () => {
+    const ruleIds = scanWith(
+      "'use server';\nimport { getStripe } from '../billing';\nexport async function charge() { return getStripe(); }",
+    );
+    expect(ruleIds).not.toContain('env/secret-in-client');
+  });
+
+  it('still flags the same secret when the boundary module is NOT a Server Action (proves the test)', () => {
+    const ruleIds = scanWith(
+      "import { getStripe } from '../billing';\nexport function charge() { return getStripe(); }",
+    );
+    expect(ruleIds).toContain('env/secret-in-client');
+  });
+});
+
 describe('scanner — per-file isolation (fail secure)', () => {
   it('skips an unreadable file with a LOW finding instead of aborting the whole scan', () => {
     const good = '/app/api/x/route.ts';

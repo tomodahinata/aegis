@@ -67,6 +67,35 @@ describe('secrets/committed-literal', () => {
     expect(idsFor('/a/ok.ts', `${STRIPE} // aegis-allow-secret`, SECRETS)).toHaveLength(0);
   });
 
+  it('does NOT flag a single-class placeholder default that merely carries a known prefix', () => {
+    // `sk_test_placeholder` matches the Stripe-test prefix shape but is a zero-entropy dictionary word,
+    // not a credential — a real-world false positive on build-time env fallbacks. (A real key still fires:
+    // `sk_live_FAKEnotReal9` is multi-class, asserted above.)
+    for (const stub of [
+      "const k = process.env.STRIPE_SECRET_KEY ?? 'sk_test_placeholder';",
+      "const k = 'sk_live_yourliveplaceholderkey';", // matches the prefix body shape, still single-class
+    ]) {
+      expect(idsFor('/a/env.ts', stub, SECRETS)).toHaveLength(0);
+    }
+  });
+
+  it('STILL flags a digit-free AWS access key id (the entropy guard must not silence it)', () => {
+    // `AKIA…` is an UPPERCASE-only prefix over a `[0-9A-Z]` body, so a real id whose 16 chars happen to
+    // carry no digit is single-class — the entropy guard would wrongly drop it. The shape is fully anchored
+    // and fixed-length, so it is `selfProving` and bypasses the guard. Both the digit-free and digit-bearing
+    // forms must fire; a guard regression here is a true false negative on a HIGH rule.
+    // The `AKIA` prefix is kept SEPARATE from the 16-char body in this file's source so commit-time secret
+    // scanners (gitleaks, which match `AKIA` adjacent to the body) don't trip on the test vector — the
+    // scanner under test still receives the reassembled contiguous literal at runtime.
+    const awsId = (body: string): string => `AKIA${body}`;
+    for (const id of [
+      awsId('QWERTYUIOPASDFGH'), // 16-char body, zero digits → single uppercase class
+      awsId('IOSFODNN7EXAMPLE'), // canonical AWS example body (carries a digit)
+    ]) {
+      expect(idsFor('/a/env.ts', `const k = '${id}';`, SECRETS)).toContain(SECRETS);
+    }
+  });
+
   it('does NOT flag a base62 / base64url encoder ALPHABET constant (charset, not a secret)', () => {
     expect(
       idsFor(

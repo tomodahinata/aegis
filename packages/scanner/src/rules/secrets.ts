@@ -10,11 +10,21 @@ const TEST_FILE = /\.(?:test|spec)\.[tj]sx?$/;
 const TOKEN_SHAPE = /^[A-Za-z0-9_-]{40,}$/;
 const MIN_ENTROPY = 4.0;
 
-const KNOWN_PREFIXES: ReadonlyArray<{ readonly re: RegExp; readonly label: string }> = [
+// `selfProving`: the regex is fully anchored AND fixed-length, so the SHAPE alone proves a credential —
+// the placeholder entropy guard below must NOT run on it. That guard keys on the lowercase-leading
+// open-ended prefixes (`sk_`, `ghp_`, …), where it costs nothing; but the AWS id is the inverse — an
+// UPPERCASE-only prefix over a `[0-9A-Z]` body, so a real digit-free id is single-class and the guard
+// would silently drop it (a true false negative on a HIGH rule, ~1 in 180 real ids). `AKIA…{16}$` cannot
+// be a dictionary placeholder, so it is exempt.
+const KNOWN_PREFIXES: ReadonlyArray<{
+  readonly re: RegExp;
+  readonly label: string;
+  readonly selfProving?: boolean;
+}> = [
   { re: /^sk_live_[A-Za-z0-9]{10,}/, label: 'Stripe live secret key' },
   { re: /^sk_test_[A-Za-z0-9]{10,}/, label: 'Stripe test secret key' },
   { re: /^rk_live_[A-Za-z0-9]{10,}/, label: 'Stripe restricted key' },
-  { re: /^AKIA[0-9A-Z]{16}$/, label: 'AWS access key id' },
+  { re: /^AKIA[0-9A-Z]{16}$/, label: 'AWS access key id', selfProving: true },
   { re: /^ghp_[A-Za-z0-9]{30,}/, label: 'GitHub personal access token' },
   { re: /^github_pat_[A-Za-z0-9_]{20,}/, label: 'GitHub fine-grained PAT' },
   { re: /^xox[baprs]-[A-Za-z0-9-]{10,}/, label: 'Slack token' },
@@ -38,6 +48,19 @@ function jwtRole(value: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * A real credential body is high-entropy with mixed character classes; an obvious placeholder default —
+ * a Stripe-prefixed dictionary word such as a "…_placeholder" or "…_your_key_here" stub — is single-class
+ * yet happens to carry a known prefix. Require ≥ 2 of {lowercase, uppercase, digit} so a placeholder is not
+ * mis-reported as a leaked credential, while a realistic mixed-class key still fires. This is a precision
+ * guard, not a recall hole: a genuine key with a lowercase-leading prefix is overwhelmingly multi-class.
+ * Applied ONLY to the open-ended prefixes; a `selfProving` shape (the anchored, fixed-length AWS id, whose
+ * UPPERCASE-only prefix would make a digit-free key single-class) bypasses it — see KNOWN_PREFIXES.
+ */
+function carriesCredentialEntropy(value: string): boolean {
+  return [/[a-z]/, /[A-Z]/, /[0-9]/].filter((re) => re.test(value)).length >= 2;
 }
 
 function looksLikeGenericSecret(value: string): boolean {
@@ -85,6 +108,9 @@ export const committedSecretLiteral: Rule = {
 
       const prefix = KNOWN_PREFIXES.find((entry) => entry.re.test(value));
       if (prefix) {
+        if (!prefix.selfProving && !carriesCredentialEntropy(value)) {
+          continue; // an open-ended-prefix shape but a single-class placeholder default — not a real credential
+        }
         ctx.report({
           node,
           confidence: 'high',

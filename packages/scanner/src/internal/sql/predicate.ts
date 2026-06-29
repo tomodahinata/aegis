@@ -251,9 +251,22 @@ const AUTH_ID = String.raw`(?:${AUTH_UID}|\(\s*select\s+${AUTH_UID}\s*(?:as\s+[a
 // to every authenticated user needs boolean-structure analysis beyond this regex; we accept the false
 // negative (fail-secure: never a false positive) rather than a fragile partial pattern.
 const COLUMN_REF = String.raw`(?=[\w".]*[A-Za-z_])[\w".]{1,256}`;
+// An owner binding is often written case-insensitively — `lower(email) = lower(auth.jwt() ->> 'email')`,
+// the idiomatic email-identity match — or wrapped in redundant grouping parens (which pg_dump emits). A
+// case-fold/trim function and the parens it adds are transparent to ownership, so EITHER operand may be
+// wrapped and the binding is still owner-bound, not the authenticated-only gap. Field-validated: a
+// `lower(col) = lower(auth.jwt() ->> 'email')` invite policy was the one residual false positive on a
+// fresh public corpus (the redundant `auth.uid() IS NOT NULL` conjunct then tripped SESSION_PROOF).
+// `coalesce(…)` is deliberately NOT in this set — its fallback can widen access, so it stays `unknown`.
+// Bounded ({0,3}) — no unbounded backtracking on adversarial input (REL-01).
+const FOLD_OPEN = String.raw`(?:lower|upper|trim|btrim)\s*\(`;
+const WRAP_OPEN = String.raw`(?:${FOLD_OPEN}|\(\s*){0,3}`;
+const WRAP_CLOSE = String.raw`(?:\s*\)){0,3}`;
 const OWNER_BOUND = new RegExp(
-  // `auth.uid() = col` / `col = auth.uid()` — the canonical single-owner binding (either operand order).
-  `${AUTH_ID}${CAST}\\s*=\\s*${COLUMN_REF}${CAST}|${COLUMN_REF}${CAST}\\s*=\\s*${AUTH_ID}${CAST}` +
+  // `auth.uid() = col` / `col = auth.uid()` — the canonical single-owner binding (either operand order),
+  // each operand tolerating an optional case-fold/trim wrapper and the grouping parens it (or pg_dump) adds.
+  `${WRAP_OPEN}${AUTH_ID}${WRAP_CLOSE}${CAST}\\s*=\\s*${WRAP_OPEN}${COLUMN_REF}` +
+    `|${WRAP_OPEN}${COLUMN_REF}${WRAP_CLOSE}${CAST}\\s*=\\s*${WRAP_OPEN}${AUTH_ID}${WRAP_CLOSE}${CAST}` +
     // `auth.uid() IN (sender_id, receiver_id)` — the caller must BE one of these columns: a participant /
     // multi-owner binding (chat, shared docs). The list must start with a COLUMN (not a literal list, and
     // not a `(SELECT …)` membership subquery — that is `role-delegated`, already matched earlier).
@@ -282,7 +295,14 @@ const SESSION_PROOF = new RegExp(
 // as 59 anon-writable false positives, all `service_role`, before this class was restored.
 const ROLE_CALL = `${selectWrap(AUTH_ROLE)}${CAST}`;
 const ROLE_RESTRICTED = new RegExp(
-  `${ROLE_CALL}\\s*=\\s*'(?!authenticated')[^']*'|'(?!authenticated')[^']*'\\s*=\\s*${ROLE_CALL}`,
+  `${ROLE_CALL}\\s*=\\s*'(?!authenticated')[^']*'|'(?!authenticated')[^']*'\\s*=\\s*${ROLE_CALL}` +
+    // `auth.role() IN ('service_role', 'supabase_admin')` — the LIST form of a specific-role gate. The role
+    // literals are blanked by `maskForClassification`, so we cannot read them here; we therefore treat ANY
+    // `auth.role() IN (…)` as a role restriction (an anon's role is never in such a list). Field-validated:
+    // this shape produced `anon-writable` false positives on the public corpus. ACCEPTED RECALL GAP
+    // (fail-secure, never an FP): a rare `auth.role() IN ('authenticated', …)` that re-widens to every
+    // authenticated user is suppressed rather than flagged — per Aegis doctrine a false negative beats an FP.
+    `|${ROLE_CALL}\\s+in\\s*\\(`,
 );
 // A JWT claim/key access — `auth.jwt() ->> 'role'`, `auth.jwt() -> 'app_metadata'`, the jsonb key-exists
 // `auth.jwt() ? 'service_role'`. Reached only after owner-bound and SESSION_PROOF, so it reads a claim to
@@ -303,7 +323,8 @@ const CONFIG_ROLE_GATE = /\b(?:current_user|session_user|current_role)\b|current
 /**
  * SQL builtins/keywords that look like a function call (`name(`) but are NOT a custom authorization
  * predicate. A custom call we don't list here is treated as `function-delegated` (suppressed) — a false
- * negative, never a false positive. `auth.*` calls are handled separately. `in`/`exists` matter most:
+ * negative, never a false positive. The recognized auth calls (auth.uid/jwt/role) are skipped via
+ * KNOWN_AUTH_CALLS; every OTHER `auth.*` helper is treated as a custom call. `in`/`exists` matter most:
  * they front the membership subqueries that must classify as `role-delegated`, not function-delegated.
  */
 const SAFE_BUILTINS: ReadonlySet<string> = new Set([
@@ -347,7 +368,16 @@ const SAFE_BUILTINS: ReadonlySet<string> = new Set([
   'round',
 ]);
 
-/** True if the predicate calls a custom (non-auth, non-builtin) function — an unverifiable delegation. */
+// The ONLY `auth.*` calls the dedicated owner/session/role checks understand. Every OTHER `auth.*()` is a
+// custom auth-schema helper — `auth.email()`, `auth.user_role()`, `auth.is_admin()`, `auth.org_id()` — whose
+// body we cannot see, so it must be treated like any other custom function: an unverifiable delegation,
+// suppressed. Field-validated: exempting ALL `auth.*` (the old behavior) let these helpers fall through to
+// `unknown`, firing `rls/anon-writable` on policies an anon can never satisfy (47 such FPs on the corpus).
+// Keep in sync with the AUTH_UID / AUTH_JWT / AUTH_ROLE regex constants above — same three functions, two
+// representations (exact call names here for the call-iteration loop; quote-tolerant regexes there).
+const KNOWN_AUTH_CALLS: ReadonlySet<string> = new Set(['auth.uid', 'auth.jwt', 'auth.role']);
+
+/** True if the predicate calls a custom (non-builtin, non-recognized-auth) function — an unverifiable delegation. */
 function callsCustomFunction(normalized: string): boolean {
   // The identifier run is bounded (`{0,255}`) — THE load-bearing REL-01 fix. The unbounded `[\w.]*`
   // made this O(n²) on a long predicate (a ~200k-char USING() hung scanSql 30-60s). 256 chars can never
@@ -357,11 +387,11 @@ function callsCustomFunction(normalized: string): boolean {
   // biome-ignore lint/suspicious/noAssignInExpressions: idiomatic global-regex iteration
   while ((m = callRe.exec(normalized)) !== null) {
     const name = m[1] ?? '';
-    if (name.startsWith('auth.')) {
+    if (KNOWN_AUTH_CALLS.has(name)) {
       continue; // auth.uid()/auth.jwt()/auth.role() — handled by the dedicated checks
     }
     if (!SAFE_BUILTINS.has(name)) {
-      return true;
+      return true; // a custom call — incl. a custom auth.* helper we cannot verify
     }
   }
   return false;
