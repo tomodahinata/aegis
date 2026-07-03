@@ -31,7 +31,36 @@ but does not scope rows to the owner — **99 such policies, ≈ 0.19% of all ~5
 > 2026-06-28 run that the write-up cites. Raw clones and per-repo results stay `.gitignore`d (ethics +
 > size); the rates are aggregate and name no repository.
 
-Six verification iterations, each surfacing a real-world false-positive (or false-negative) class that the
+## Replication at scale (2026-07-01)
+
+The original 450-repo run was **replicated at 2× scale on an independent seeded sample**, and the headline
+held. GitHub code search surfaced **2,234** unique public repos; we scanned **1,000** (independent seed,
+not the 2026-06-28 set). **998** scanned cleanly, **994** ship RLS, and **116,662** RLS policies were
+analyzed — ~2.2× the original policy volume.
+
+| Rule | Flag rate | Findings (policies) | Manual triage |
+|---|---:|---:|---|
+| `rls/policy-not-owner-scoped` (flagship) | **9.2%** (91 / 994) | **235** | **all 235 ground-truthed → precision 1.0, 0 residual FP** |
+| `rls/table-without-rls` | 27.4% (273 / 998) | — | indicative (not audited to the same precision) |
+
+The flagship owner-scope rule held **precision 1.0 on a fresh, larger corpus** (235 findings, every one a
+genuine authenticated-only gap on re-clone) — the original "precision 1.0" was not a benchmark artifact.
+
+**A 7th hardening iteration, surfaced by this very run.** The 1,000-repo scan exposed the *sibling*
+`rls/anon-writable` rule over-firing: of 80 findings, **~68% (54) were false positives** — custom `auth.*()`
+schema helpers (`auth.is_admin()`, `auth.email()`, `auth.user_role()`, `auth.org_id()`) and the list form
+`auth.role() IN ('service_role', …)`, none of which an anon can satisfy. The classifier was hardened
+(unrecognized `auth.*()` → `function-delegated`; `auth.role() IN (…)` → `role-delegated`), cutting
+`anon-writable` from **80 → 26** **with zero recall loss on the flagship rule** (235 → 235 on a same-sample
+re-scan). Both fixed classes are locked as regression fixtures. Of the 26 that still fire, **22 are genuinely
+anon-satisfiable row-state predicates** and **4 are residual false positives** across three shapes an anon
+cannot actually satisfy: `auth.uid() = '<hardcoded-uuid>'` (×2, documented and accepted) and — not yet
+suppressed — the `(select auth.uid() as uid) is not null` and `(select auth.jwt() ->> 'email') = email`
+wrapper forms, where the Supabase performance wrapper's `AS <alias>` defeats the session-proof / owner-bound
+match. That `selectWrap` alias gap is tracked as a follow-up fix (with its own regression fixtures);
+disclosing it keeps the precision figure honest rather than rounding it up.
+
+Seven verification iterations, each surfacing a real-world false-positive (or false-negative) class that the
 curated benchmark had missed:
 
 1. `service_role` / admin-claim gates, `::cast`, `as` aliases mistaken for the gap.
@@ -43,6 +72,9 @@ curated benchmark had missed:
 5. A **cross-rule regression**: routing role gates to `unknown` made the sibling `rls/anon-writable` rule
    fire on `service_role` policies an anon can never satisfy — caught by auditing the secondary rule.
 6. `auth.uid() IN (sender_id, receiver_id)` participant bindings.
+7. *(2026-07-01, from the 1,000-repo run)* `lower(col) = lower(auth.jwt() ->> 'email')` case-insensitive
+   owner bindings (flagship rule); custom `auth.*()` helpers and `auth.role() IN (…)` list gates wrongly
+   read as anon-satisfiable by the sibling `rls/anon-writable` rule (the ~68% FP class above).
 
 Every class above is now locked as a regression fixture:
 
