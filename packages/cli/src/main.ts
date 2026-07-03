@@ -6,7 +6,9 @@ import { runDoctor } from './commands/doctor';
 import { runFix } from './commands/fix';
 import { runInit } from './commands/init';
 import { runProbe } from './commands/probe';
+import { parseFramework, parseReportFormat, runReport } from './commands/report';
 import { type OutputFormat, runScan } from './commands/scan';
+import { UsageError } from './errors';
 import { EXIT } from './exit';
 import { resolveRoot } from './root';
 
@@ -21,11 +23,14 @@ Commands:
   init      Scaffold a secure() middleware (idempotent)
   doctor    Audit effective security config (optionally against a running URL)
   probe     Dynamically probe a RUNNING app you own; confirm findings at runtime
+  report    Map findings to SOC 2 / ISO 27001 control evidence (reference mapping)
 
 [path] is an optional directory to operate on (default: --cwd, else current directory).
 
 Options:
-  --format <pretty|json|sarif>   scan output format (default: pretty); fix: pretty|json
+  --format <pretty|json|sarif>   scan output format (default: pretty); fix: pretty|json; report: md|json
+  --framework <soc2|iso27001>    (report) compliance framework to map findings to
+  --out <file>                   (report) write the report to a file instead of stdout
   --severity <BLOCKER|HIGH|MEDIUM|LOW|INFO>   threshold that fails the run (default: HIGH)
   --strict                       fail on findings of any confidence (default: high only)
   --no-color                     disable ANSI color
@@ -51,8 +56,6 @@ Probe targets default to localhost only; a remote host requires --allow-remote A
 
 Exit codes: 0 clean · 1 findings · 2 usage error · 3 internal error
 `;
-
-class UsageError extends Error {}
 
 const SEVERITIES: readonly string[] = ['BLOCKER', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
 const FORMATS: readonly string[] = ['pretty', 'json', 'sarif'];
@@ -105,6 +108,8 @@ async function main(): Promise<number> {
       'allow-remote': { type: 'boolean', default: false },
       'i-own': { type: 'string' },
       'max-requests': { type: 'string' },
+      framework: { type: 'string' },
+      out: { type: 'string' },
       cwd: { type: 'string' },
       help: { type: 'boolean', default: false },
     },
@@ -190,6 +195,15 @@ async function main(): Promise<number> {
         allowRemote: values['allow-remote'] === true,
         ...(iOwn !== undefined ? { iOwn } : {}),
         ...(maxRequests !== undefined ? { maxRequests: Number(maxRequests) } : {}),
+      });
+    }
+    case 'report': {
+      const out = str(values.out);
+      return runReport({
+        cwd,
+        framework: parseFramework(str(values.framework)),
+        format: parseReportFormat(str(values.format)),
+        ...(out !== undefined ? { out } : {}),
       });
     }
     default:

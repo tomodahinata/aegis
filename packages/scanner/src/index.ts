@@ -18,6 +18,16 @@ export {
   serializeBaseline,
 } from './baseline';
 export { classifyFile, type FileClassification, type RuntimeContext } from './classify';
+export {
+  type ComplianceFramework,
+  SUPPORTED_FRAMEWORKS,
+} from './compliance/controls';
+export {
+  buildComplianceReport,
+  type ComplianceReport,
+  type ControlEvidence,
+  type ControlStatus,
+} from './compliance/report';
 export { type CorrelateRlsOptions, correlateRls } from './correlate-rls';
 export { type ScanOptions, scan } from './engine';
 export { applyTextEdits, type FilePlan, planFileFixes } from './fix';
@@ -34,6 +44,8 @@ export type {
   TaintSpec,
   TaintStep,
 } from './internal/taint-descriptors';
+export { toComplianceJson } from './reporters/compliance-json';
+export { toComplianceMd } from './reporters/compliance-md';
 export { toJson } from './reporters/json';
 export { toSarif } from './reporters/sarif';
 export { docsUrlFor, type FileInfo, type Rule, type RuleContext, type RuleMeta } from './rule';
