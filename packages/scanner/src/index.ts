@@ -23,6 +23,17 @@ export {
   SUPPORTED_FRAMEWORKS,
 } from './compliance/controls';
 export {
+  computeRemediation,
+  type FindingLifecycle,
+  type LifecycleStatus,
+  parseHistory,
+  type RemediationSummary,
+  type ScanHistory,
+  type ScanRecord,
+  serializeScanRecord,
+  toScanRecord,
+} from './compliance/history';
+export {
   buildComplianceReport,
   type ComplianceReport,
   type ControlEvidence,
@@ -44,6 +55,7 @@ export type {
   TaintSpec,
   TaintStep,
 } from './internal/taint-descriptors';
+export { toComplianceHtml } from './reporters/compliance-html';
 export { toComplianceJson } from './reporters/compliance-json';
 export { toComplianceMd } from './reporters/compliance-md';
 export { toJson } from './reporters/json';
@@ -58,6 +70,7 @@ export {
   type Confidence,
   emptySummary,
   type Finding,
+  type FindingExplanation,
   type Fix,
   type HttpExchange,
   meetsThreshold,

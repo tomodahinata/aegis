@@ -60,6 +60,14 @@ export interface TableInfo {
   readonly rlsEnabled: boolean;
   /** Whether the table declares an ownership column (user_id/tenant_id/org_id/…). */
   readonly hasOwnershipColumn: boolean;
+  /**
+   * The first ownership column the table DECLARES (e.g. `user_id`), lowercased — the concrete column a
+   * suggested owner-scoped policy binds to. Usually present when `hasOwnershipColumn` is true, but may be
+   * absent even then if the only match was an FK `REFERENCES()` to another table (the RLS rule falls back
+   * to a canonical name). Advisory only: when a table carries several, the first seen is used; the reader
+   * adapts the suggestion to their model.
+   */
+  readonly ownershipColumn?: string;
   readonly loc: SqlLocation;
 }
 
@@ -79,7 +87,20 @@ interface MutableTable {
   name: string;
   rlsEnabled: boolean;
   hasOwnershipColumn: boolean;
+  ownershipColumn?: string;
   loc: SqlLocation;
+}
+
+/**
+ * The first ownership column the statement DECLARES, lowercased, or undefined. Columns that appear only
+ * inside a `REFERENCES(...)` clause are ignored: they name another table's column (an FK target), not one
+ * this table has, so binding a suggested policy to one would emit SQL referencing a column that does not
+ * exist here. Presence detection (`hasOwnershipColumn`) stays on the raw text so RLS-gap detection is
+ * unchanged; only the concrete column chosen for the advisory suggestion is refined.
+ */
+function firstOwnershipColumn(text: string): string | undefined {
+  const withoutForeignRefs = text.replace(/\breferences\b[^(]*\([^)]*\)/gi, ' ');
+  return OWNERSHIP_COLUMN_PATTERN.exec(withoutForeignRefs)?.[0]?.toLowerCase();
 }
 
 /** A policy under construction: `tableHasOwnershipColumn` is set in the finalization pass below. */
@@ -251,11 +272,15 @@ export function buildRlsModel(sources: readonly SqlSource[]): RlsModel {
         const isTransient =
           /\b(?:temp|temporary)\s+table\b/i.test(text) || /\bpartition\s+of\b/i.test(text);
         if (schema === 'public' && !isTransient && !tables.has(name)) {
+          const ownershipColumn = firstOwnershipColumn(text);
           tables.set(name, {
             name,
             rlsEnabled: false,
+            // Presence stays on the raw text (detection unchanged); the concrete column may still be
+            // undefined if the only match was an FK reference — the RLS rule falls back defensively then.
             hasOwnershipColumn: OWNERSHIP_COLUMN_PATTERN.test(text),
             loc,
+            ...(ownershipColumn !== undefined ? { ownershipColumn } : {}),
           });
         }
         continue;
@@ -284,6 +309,7 @@ export function buildRlsModel(sources: readonly SqlSource[]): RlsModel {
           const existing = tables.get(name);
           if (existing) {
             existing.hasOwnershipColumn = true;
+            existing.ownershipColumn ??= column; // keep the first; a CREATE-TABLE column takes precedence
           }
         }
         continue;

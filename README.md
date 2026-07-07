@@ -100,7 +100,8 @@ Every rule is designed to produce **zero findings on a correct, production-grade
 | `@aegiskit/store-supabase` | Persistent `EventStore` on Supabase/Postgres, with a migration (RLS on by default). |
 | `@aegiskit/scanner` | Static analysis engine: syntactic checks, **intraprocedural taint/dataflow** for the injection class, and **Supabase RLS/SQL verification** with SQL↔code correlation; source→sink traces; inline suppression + baseline. |
 | `@aegiskit/dast` | Dynamic testing: safe, bounded, non-destructive runtime probes against your own app, with SAST↔DAST correlation (confirmed-exploitable). Localhost-default, fail-secure. |
-| `@aegiskit/cli` | `aegis scan · fix · init · doctor · ci · probe` — accessible reports, safe auto-fixes, SARIF, CI integration, runtime probing. |
+| `@aegiskit/cli` | `aegis scan · fix · init · doctor · ci · probe · report` — accessible reports, safe auto-fixes, SARIF, CI integration, runtime probing, and SOC 2 / ISO 27001 control-evidence reports (Markdown/JSON/print-ready HTML, with a remediation-over-time ledger). |
+| `@aegiskit/mcp` | Aegis as a Model Context Protocol server (`scan_project`, `explain_finding`) for Claude Code / Cursor — find and understand Supabase RLS/authz gaps in-editor, with an LLM-ready owner-scoped policy suggestion and secret evidence redacted before it reaches the model. |
 | `@aegiskit/eslint-config` | Edit-time security lint preset (no false positives). |
 
 Plus `apps/dashboard` — a self-hostable, WCAG 2.2 AA security dashboard (posture, events, CSP) that dogfoods Aegis — and a reusable GitHub Action ([`action.yml`](./action.yml)) wrapping `aegis ci`.

@@ -136,6 +136,46 @@ describe('renderReport', () => {
   });
 });
 
+describe('renderReport — advisory suggested policy (RLS explainability)', () => {
+  const explained: ScanResult = {
+    ...result,
+    findings: [
+      {
+        ...aiFinding,
+        ruleId: 'rls/policy-not-owner-scoped',
+        explanation: {
+          kind: 'authenticated-only',
+          detail: 'proves a session exists but never binds the row to the caller',
+          suggestedFix:
+            'create policy "notes_select_owner" on public.notes\n' +
+            '  for select to authenticated\n' +
+            '  using (auth.uid() = user_id);',
+        },
+      },
+    ],
+  };
+
+  it('renders the advisory suggested policy after the fix, labelled advisory (rich mode)', () => {
+    const out = renderReport(explained, { color: false, plain: false });
+    expect(out).toContain('→ Suggested policy (advisory — review before applying):');
+    expect(out).toContain('using (auth.uid() = user_id);');
+    // Ordered after the Fix line and before the Docs line.
+    expect(out.indexOf('→ Fix:')).toBeLessThan(out.indexOf('→ Suggested policy'));
+    expect(out.indexOf('→ Suggested policy')).toBeLessThan(out.indexOf('Docs:'));
+  });
+
+  it('renders the suggested policy as a labelled block for screen readers (plain mode)', () => {
+    const out = renderReport(explained, { color: false, plain: true });
+    expect(out).toContain('Suggested fix (advisory — review before applying):');
+    expect(out).toContain('create policy "notes_select_owner" on public.notes');
+    expect(out).not.toContain('▲');
+  });
+
+  it('omits the suggested-policy block for a finding without an explanation (backward compatible)', () => {
+    expect(renderReport(result, { color: false, plain: false })).not.toContain('Suggested policy');
+  });
+});
+
 describe('renderReport — prioritized headline & ordering', () => {
   const mk = (
     ruleId: string,

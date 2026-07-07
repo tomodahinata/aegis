@@ -104,6 +104,75 @@ describe('runReport', () => {
     expect(readFileSync(outPath, 'utf8')).toContain('CC6.1');
     expect(out).toMatch(/wrote soc2 evidence to/);
   });
+
+  it('renders a self-contained HTML evidence document with --format html', () => {
+    const root = tmpProject({ 'supabase/migrations/0001_init.sql': RLS_GAP_SQL });
+    const { code, out } = run({ ...baseArgs(root), format: 'html' });
+    expect(code).toBe(EXIT.CLEAN);
+    expect(out.startsWith('<!DOCTYPE html>')).toBe(true);
+    expect(out).toContain('<html lang="en">');
+    expect(out).toContain('CC6.1');
+    expect(out).not.toMatch(/\bcompliant\b/i);
+  });
+
+  it('appends to the history ledger with --record and shows remediation once history exists', () => {
+    const root = tmpProject({ 'supabase/migrations/0001_init.sql': RLS_GAP_SQL });
+    const ledger = join(root, '.aegis/history.jsonl');
+
+    // First recorded scan: the gap is open, but one scan is a point, not a trend — the remediation-over-
+    // time section needs ≥2 scans, so it must NOT render yet, even though the ledger now holds one record.
+    const first = run({
+      ...baseArgs(root),
+      format: 'html',
+      record: true,
+      now: '2026-07-01T00:00:00Z',
+    });
+    expect(existsSync(ledger)).toBe(true);
+    expect(readFileSync(ledger, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(first.out).not.toContain('Remediation tracking');
+
+    // Second recorded scan a week later: history now spans two scans, so remediation tracking renders.
+    const second = run({
+      ...baseArgs(root),
+      format: 'html',
+      record: true,
+      now: '2026-07-08T00:00:00Z',
+    });
+    expect(readFileSync(ledger, 'utf8').trim().split('\n')).toHaveLength(2);
+    expect(second.out).toContain('Remediation tracking');
+    expect(second.out).toContain('open');
+  });
+
+  it('honours a custom --history path', () => {
+    const root = tmpProject({ 'supabase/migrations/0001_init.sql': RLS_GAP_SQL });
+    const ledger = join(root, 'audit/ledger.jsonl');
+    run({ ...baseArgs(root), record: true, history: ledger, now: '2026-07-01T00:00:00Z' });
+    expect(existsSync(ledger)).toBe(true);
+  });
+
+  it('stamps the recorded scan with --commit for CI provenance', () => {
+    const root = tmpProject({ 'supabase/migrations/0001_init.sql': RLS_GAP_SQL });
+    const ledger = join(root, '.aegis/history.jsonl');
+    run({ ...baseArgs(root), record: true, commit: 'abc123', now: '2026-07-01T00:00:00Z' });
+    const line = readFileSync(ledger, 'utf8').trim().split('\n')[0] as string;
+    expect(JSON.parse(line).commit).toBe('abc123');
+  });
+
+  it('still renders the report when the history ledger cannot be written (advisory degrades)', () => {
+    const root = tmpProject({ 'supabase/migrations/0001_init.sql': RLS_GAP_SQL });
+    // A file where a directory is expected makes mkdirSync/appendFileSync throw for the ledger.
+    const wall = join(root, 'not-a-dir');
+    writeFileSync(wall, 'x');
+    const { code, out } = run({
+      ...baseArgs(root),
+      format: 'html',
+      record: true,
+      history: join(wall, 'ledger.jsonl'),
+      now: '2026-07-01T00:00:00Z',
+    });
+    expect(code).toBe(EXIT.CLEAN); // the report (primary deliverable) is still produced
+    expect(out).toContain('CC6.1');
+  });
 });
 
 describe('report arg parsing', () => {
@@ -117,10 +186,11 @@ describe('report arg parsing', () => {
     expect(() => parseFramework('pci-dss')).toThrow(UsageError);
   });
 
-  it('defaults the report format to md and accepts json', () => {
+  it('defaults the report format to md and accepts json/html', () => {
     expect(parseReportFormat(undefined)).toBe('md');
     expect(parseReportFormat('md')).toBe('md');
     expect(parseReportFormat('json')).toBe('json');
+    expect(parseReportFormat('html')).toBe('html');
   });
 
   it('rejects an unsupported report format with a UsageError', () => {

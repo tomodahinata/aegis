@@ -1,7 +1,8 @@
 /**
  * The full-project scan: TypeScript rules (`scan`) + Supabase SQL/RLS rules (`scanSql`) + RLS↔code
  * correlation, merged into one `ScanResult`. Shared by `scan`/`ci`/`doctor` (DRY) so every command
- * sees the same findings — application-layer and database-layer together.
+ * sees the same findings — application-layer and database-layer together. Also consumed across the
+ * package boundary by `@aegiskit/mcp`, so treat `scanProject`'s signature as a cross-package contract.
  */
 
 import { readFileSync } from 'node:fs';

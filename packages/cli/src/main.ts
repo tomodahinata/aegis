@@ -28,9 +28,12 @@ Commands:
 [path] is an optional directory to operate on (default: --cwd, else current directory).
 
 Options:
-  --format <pretty|json|sarif>   scan output format (default: pretty); fix: pretty|json; report: md|json
+  --format <pretty|json|sarif>   scan output format (default: pretty); fix: pretty|json; report: md|json|html
   --framework <soc2|iso27001>    (report) compliance framework to map findings to
   --out <file>                   (report) write the report to a file instead of stdout
+  --record                       (report) append this scan to the history ledger (remediation evidence)
+  --history <file>               (report) scan-history ledger path (default: .aegis/history.jsonl)
+  --commit <sha>                 (report, with --record) commit SHA to stamp on the recorded scan (e.g. CI's github.sha)
   --severity <BLOCKER|HIGH|MEDIUM|LOW|INFO>   threshold that fails the run (default: HIGH)
   --strict                       fail on findings of any confidence (default: high only)
   --no-color                     disable ANSI color
@@ -110,6 +113,9 @@ async function main(): Promise<number> {
       'max-requests': { type: 'string' },
       framework: { type: 'string' },
       out: { type: 'string' },
+      history: { type: 'string' },
+      record: { type: 'boolean', default: false },
+      commit: { type: 'string' },
       cwd: { type: 'string' },
       help: { type: 'boolean', default: false },
     },
@@ -199,11 +205,16 @@ async function main(): Promise<number> {
     }
     case 'report': {
       const out = str(values.out);
+      const history = str(values.history);
+      const commit = str(values.commit);
       return runReport({
         cwd,
         framework: parseFramework(str(values.framework)),
         format: parseReportFormat(str(values.format)),
+        record: values.record === true,
         ...(out !== undefined ? { out } : {}),
+        ...(history !== undefined ? { history } : {}),
+        ...(commit !== undefined ? { commit } : {}),
       });
     }
     default:

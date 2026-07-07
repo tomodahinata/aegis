@@ -9,4 +9,5 @@ export { type InitArgs, runInit } from './commands/init';
 export { type OutputFormat, runScan, type ScanArgs } from './commands/scan';
 export { discoverFiles } from './discover';
 export { EXIT, type ExitOptions, exitCodeFor } from './exit';
+export { type ProjectScanOptions, scanProject } from './project-scan';
 export { type RenderOptions, renderReport } from './reporters/pretty';

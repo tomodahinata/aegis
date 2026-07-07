@@ -6,6 +6,7 @@
  * (reference data) — conservative toward zero false positives, with the recall trade-off documented.
  */
 
+import { suggestOwnerScopedPolicy } from '../internal/sql/policy-suggestion';
 import { effectivePolicyClass, isAuthenticatedOnlyGap } from '../internal/sql/predicate';
 import { docsUrlFor } from '../rule';
 import type { SqlRule } from '../sql-rule';
@@ -160,6 +161,13 @@ export const policyNotOwnerScoped: SqlRule = {
       const message = writeCheckGap
         ? `Policy on "${policy.table}" (${policy.command.toUpperCase()}) scopes reads to the caller but its WITH CHECK only verifies the caller is authenticated (e.g. auth.uid() IS NOT NULL) — any authenticated user can write rows they don't own or set the ownership column to someone else's id (IDOR write). Aegis flags this for review; the USING clause alone looked correct.`
         : `Policy on "${policy.table}" (${policy.command.toUpperCase()}) only checks that the caller is authenticated (e.g. auth.role()/auth.uid() IS NOT NULL), but the table has an ownership column — every authenticated user can ${policy.command === 'select' ? 'read' : 'read or modify'} EVERY row, not just their own. Aegis flags this for review; it cannot confirm whether the table is meant to be shared.`;
+      // The concrete column the suggested fix binds to. The table carries an ownership column here, but its
+      // NAME may be undefined if the only match was an FK reference to another table — fall back to the
+      // canonical Supabase name so the advisory suggestion is still valid to adapt.
+      const ownershipColumn = ctx.model.tables.get(policy.table)?.ownershipColumn ?? 'user_id';
+      const detail = writeCheckGap
+        ? 'The USING clause scopes reads to the owner, but the WITH CHECK clause only proves a session exists — it never binds the written row to the caller, so writes are unrestricted (IDOR write).'
+        : `The predicate proves a session exists (e.g. auth.uid() IS NOT NULL / auth.role() = 'authenticated') but never compares it to the "${ownershipColumn}" ownership column, so it scopes no rows to the caller.`;
       ctx.report({
         loc: policy.loc,
         confidence: 'medium',
@@ -169,6 +177,15 @@ export const policyNotOwnerScoped: SqlRule = {
         evidence: writeCheckGap
           ? (policy.checkExpr ?? `${policy.table} ${policy.command} with check`)
           : (policy.usingExpr ?? policy.checkExpr ?? `${policy.table} ${policy.command}`),
+        explanation: {
+          kind: writeCheckGap ? 'authenticated-only-write-check' : 'authenticated-only',
+          detail,
+          suggestedFix: suggestOwnerScopedPolicy({
+            table: policy.table,
+            ownershipColumn,
+            command: policy.command,
+          }),
+        },
       });
     }
   },

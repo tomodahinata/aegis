@@ -49,6 +49,10 @@ interface SarifResult {
   readonly level: 'error' | 'warning' | 'note';
   readonly locations: ReadonlyArray<{ readonly physicalLocation: SarifPhysicalLocation }>;
   readonly partialFingerprints: { readonly aegisFingerprint: string };
+  readonly properties?: Record<string, unknown> & {
+    readonly gapKind?: string;
+    readonly suggestedFix?: string;
+  };
   readonly codeFlows?: ReadonlyArray<{
     readonly threadFlows: ReadonlyArray<{ readonly locations: readonly SarifThreadFlowLocation[] }>;
   }>;
@@ -188,5 +192,40 @@ describe('toSarif — dynamic (DAST) findings', () => {
   it('keeps a source region for a static finding (backward compatible)', () => {
     const location = run(parse([finding()])).results[0]?.locations[0]?.physicalLocation;
     expect(location?.region?.startLine).toBe(1);
+  });
+});
+
+describe('toSarif — RLS explanation properties', () => {
+  const explained = finding({
+    ruleId: 'rls/policy-not-owner-scoped',
+    severity: 'HIGH',
+    explanation: {
+      kind: 'authenticated-only',
+      detail: 'proves a session exists but never binds the row to the caller',
+      suggestedFix:
+        'create policy "notes_select_owner" on public.notes\n' +
+        '  for select to authenticated\n' +
+        '  using (auth.uid() = user_id);',
+    },
+  });
+
+  it('surfaces gapKind and the advisory suggestedFix under result.properties', () => {
+    const props = run(parse([explained])).results[0]?.properties;
+    expect(props?.gapKind).toBe('authenticated-only');
+    expect(props?.suggestedFix).toContain('using (auth.uid() = user_id);');
+  });
+
+  it('omits gapKind/suggestedFix for a finding without an explanation (byte-identical)', () => {
+    const props = run(parse([finding()])).results[0]?.properties ?? {};
+    expect('gapKind' in props).toBe(false);
+    expect('suggestedFix' in props).toBe(false);
+  });
+
+  it('emits gapKind but no suggestedFix when the explanation carries no fix', () => {
+    const props = run(
+      parse([finding({ explanation: { kind: 'authenticated-only', detail: 'why' } })]),
+    ).results[0]?.properties;
+    expect(props?.gapKind).toBe('authenticated-only');
+    expect('suggestedFix' in (props ?? {})).toBe(false);
   });
 });

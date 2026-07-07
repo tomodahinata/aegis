@@ -102,6 +102,16 @@ export function toSarif(result: ScanResult): string {
         ...(finding.target !== undefined
           ? { target: { method: finding.target.method, path: finding.target.path } }
           : {}),
+        // Advisory only (a starting point, not a machine-applied edit) — surfaced as properties so GitHub
+        // code-scanning shows the "why" + corrected policy without implying an auto-fix.
+        ...(finding.explanation !== undefined
+          ? {
+              gapKind: finding.explanation.kind,
+              ...(finding.explanation.suggestedFix !== undefined
+                ? { suggestedFix: finding.explanation.suggestedFix }
+                : {}),
+            }
+          : {}),
       },
       ...(codeFlows !== undefined ? { codeFlows } : {}),
     };

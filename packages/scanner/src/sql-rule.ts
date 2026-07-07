@@ -5,7 +5,7 @@
  */
 
 import type { RlsModel, SqlLocation } from './internal/sql/model';
-import type { Confidence, Severity } from './types';
+import type { Confidence, FindingExplanation, Severity } from './types';
 
 export interface SqlRuleMeta {
   readonly id: string;
@@ -25,6 +25,8 @@ export interface SqlReportInput {
   /** Override `meta.severity` for this finding (rare). */
   readonly severity?: Severity;
   readonly evidence?: string;
+  /** Structured "why" + advisory corrected statement (see `FindingExplanation`). Omit when not derivable. */
+  readonly explanation?: FindingExplanation;
 }
 
 export interface SqlRuleContext {

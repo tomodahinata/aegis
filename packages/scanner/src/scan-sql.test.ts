@@ -185,6 +185,73 @@ describe('scanSql — rls/policy-not-owner-scoped (RLS exists but does not scope
     ).toContain(RULE);
   });
 
+  it('carries a structured explanation + an owner-scoped suggested policy bound to the real column', () => {
+    const finding = scan1(
+      `create table public.invoices (id uuid primary key, tenant_id uuid not null, total int);
+       alter table public.invoices enable row level security;
+       create policy "p" on public.invoices for select to authenticated using (auth.uid() is not null);`,
+    ).findings.find((f) => f.ruleId === RULE);
+    expect(finding?.explanation?.kind).toBe('authenticated-only');
+    // The suggestion binds to the table's actual ownership column (tenant_id), not a generic placeholder.
+    expect(finding?.explanation?.suggestedFix).toBe(
+      'create policy "invoices_select_owner" on public.invoices\n' +
+        '  for select to authenticated\n' +
+        '  using (auth.uid() = tenant_id);',
+    );
+    expect(finding?.explanation?.detail).toContain('tenant_id');
+  });
+
+  it('labels the write-check gap distinctly and suggests a both-clause policy', () => {
+    const finding = scan1(
+      `create table public.docs (id uuid primary key, user_id uuid not null);
+       alter table public.docs enable row level security;
+       create policy "p" on public.docs for all to authenticated
+         using (auth.uid() = user_id) with check (auth.uid() is not null);`,
+    ).findings.find((f) => f.ruleId === RULE);
+    expect(finding?.explanation?.kind).toBe('authenticated-only-write-check');
+    expect(finding?.explanation?.suggestedFix).toContain('using (auth.uid() = user_id)');
+    expect(finding?.explanation?.suggestedFix).toContain('with check (auth.uid() = user_id)');
+  });
+
+  it('binds the suggested fix to an ownership column introduced by ALTER TABLE ADD COLUMN', () => {
+    const finding = scan1(
+      `create table public.docs (id uuid primary key, body text);
+       alter table public.docs add column org_id uuid not null;
+       alter table public.docs enable row level security;
+       create policy "p" on public.docs for select to authenticated
+         using (auth.uid() is not null);`,
+    ).findings.find((f) => f.ruleId === RULE);
+    expect(finding?.explanation?.suggestedFix).toContain('using (auth.uid() = org_id);');
+    expect(finding?.explanation?.detail).toContain('org_id');
+  });
+
+  it('prefers a CREATE-TABLE ownership column over a later ALTER-added one', () => {
+    const finding = scan1(
+      `create table public.docs (id uuid primary key, user_id uuid not null);
+       alter table public.docs add column tenant_id uuid;
+       alter table public.docs enable row level security;
+       create policy "p" on public.docs for select to authenticated
+         using (auth.uid() is not null);`,
+    ).findings.find((f) => f.ruleId === RULE);
+    expect(finding?.explanation?.suggestedFix).toContain('auth.uid() = user_id');
+  });
+
+  it('binds to a column the table declares, not one named only in a FOREIGN KEY reference', () => {
+    // `user_id` appears only inside `references ...(user_id)`; the table's own ownership column is tenant_id.
+    const finding = scan1(
+      `create table public.audit_log (
+         id uuid primary key,
+         actor uuid references public.profiles(user_id),
+         tenant_id uuid not null
+       );
+       alter table public.audit_log enable row level security;
+       create policy "p" on public.audit_log for select to authenticated
+         using (auth.uid() is not null);`,
+    ).findings.find((f) => f.ruleId === RULE);
+    expect(finding?.explanation?.suggestedFix).toContain('auth.uid() = tenant_id');
+    expect(finding?.explanation?.suggestedFix).not.toContain('user_id');
+  });
+
   it('does NOT fire on an owner-bound policy (auth.uid() = user_id)', () => {
     expect(
       idsOf(

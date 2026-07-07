@@ -1,0 +1,70 @@
+{
+  "name": "@aegiskit/mcp",
+  "version": "0.0.0",
+  "description": "Aegis as a Model Context Protocol server — scan and explain Supabase RLS/authz gaps from inside Claude Code, Cursor, and other MCP agents.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "aegis-mcp": "./dist/main.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "development": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aegiskit/cli": "workspace:*",
+    "@aegiskit/scanner": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "keywords": [
+    "security",
+    "mcp",
+    "model-context-protocol",
+    "claude-code",
+    "cursor",
+    "supabase",
+    "rls",
+    "nextjs",
+    "appsec"
+  ],
+  "author": "tomodahinata",
+  "homepage": "https://github.com/tomodahinata/aegis/tree/main/packages/mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tomodahinata/aegis.git",
+    "directory": "packages/mcp"
+  },
+  "bugs": "https://github.com/tomodahinata/aegis/issues",
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
+  }
+}

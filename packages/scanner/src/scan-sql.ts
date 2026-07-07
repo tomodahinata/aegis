@@ -56,6 +56,7 @@ export function scanSql(options: ScanSqlOptions): ScanResult {
           remediation: input.remediation,
           ...(rule.meta.owasp !== undefined ? { owasp: rule.meta.owasp } : {}),
           ...(input.evidence !== undefined ? { evidence: input.evidence } : {}),
+          ...(input.explanation !== undefined ? { explanation: input.explanation } : {}),
         });
       },
     };

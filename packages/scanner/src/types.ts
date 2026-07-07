@@ -73,6 +73,22 @@ export interface HttpExchange {
   };
 }
 
+/**
+ * A structured, plain-language explanation of WHY a finding is a gap, plus — when Aegis can derive one — a
+ * concrete corrected statement to adapt. Present only on findings whose rule can prove the "why" (currently
+ * the RLS owner-scoping rule), so every other finding serializes and renders byte-identically (mirrors
+ * `trace?`/`target?`). The `suggestedFix` is ADVISORY: a starting point for the reader, never an automatic
+ * edit — Aegis cannot know your intended ownership semantics, so it does not ship as a machine-applied `fix`.
+ */
+export interface FindingExplanation {
+  /** Stable machine token for the kind of gap, e.g. the RLS predicate class `authenticated-only`. */
+  readonly kind: string;
+  /** One or two sentences: the proof the code DOES carry vs the binding it is MISSING. */
+  readonly detail: string;
+  /** A copy-pasteable corrected statement (e.g. an owner-scoped CREATE POLICY), when derivable. */
+  readonly suggestedFix?: string;
+}
+
 export interface Finding {
   readonly ruleId: string;
   readonly severity: Severity;
@@ -103,6 +119,12 @@ export interface Finding {
    * static finding, so existing findings render byte-identically.
    */
   readonly target?: HttpExchange;
+  /**
+   * A structured "why this is a gap" plus an advisory corrected statement. Present only on findings whose
+   * rule can prove the explanation (the RLS owner-scoping rule); absent elsewhere, so findings without it
+   * serialize and render byte-identically.
+   */
+  readonly explanation?: FindingExplanation;
 }
 
 /** A check that confirmed a *good* practice — rendered green, never a failure. Builds trust. */

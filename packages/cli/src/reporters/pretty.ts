@@ -166,6 +166,26 @@ function renderHttpEvidence(finding: Finding, c: Palette, plain: boolean): strin
   ];
 }
 
+/**
+ * Render a finding's advisory corrected statement (e.g. an owner-scoped CREATE POLICY). Labelled, never
+ * color-only (WCAG); plain mode is a labelled block for screen readers. Answers the "…and here's the fix"
+ * half of the #1 community ask alongside the "why" already carried in the message.
+ */
+function renderSuggestedFix(finding: Finding, c: Palette, plain: boolean): string[] {
+  const suggested = finding.explanation?.suggestedFix;
+  if (!suggested) {
+    return [];
+  }
+  const body = suggested.split('\n');
+  if (plain) {
+    return ['Suggested fix (advisory — review before applying):', ...body];
+  }
+  return [
+    `  ${c.cyan('→ Suggested policy (advisory — review before applying):')}`,
+    ...body.map((line) => `      ${c.dim(line)}`),
+  ];
+}
+
 export function renderReport(result: ScanResult, options: RenderOptions): string {
   const c = palette(options.color);
   const rel = (file: string): string => (options.cwd ? relative(options.cwd, file) : file);
@@ -201,6 +221,7 @@ export function renderReport(result: ScanResult, options: RenderOptions): string
       lines.push(...renderTrace(finding, c, traceLoc, true));
       lines.push(...renderHttpEvidence(finding, c, true));
       lines.push(`Fix: ${finding.remediation}`);
+      lines.push(...renderSuggestedFix(finding, c, true));
       lines.push(`Docs: ${finding.docsUrl}${owasp}`);
       lines.push('');
     } else {
@@ -213,6 +234,7 @@ export function renderReport(result: ScanResult, options: RenderOptions): string
       lines.push(...renderTrace(finding, c, traceLoc, false));
       lines.push(...renderHttpEvidence(finding, c, false));
       lines.push(`  ${c.cyan('→ Fix:')} ${finding.remediation}`);
+      lines.push(...renderSuggestedFix(finding, c, false));
       lines.push(`  ${c.dim(`Docs: ${finding.docsUrl}${owasp}`)}`);
       lines.push('');
     }
