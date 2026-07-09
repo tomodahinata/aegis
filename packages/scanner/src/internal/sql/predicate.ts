@@ -580,6 +580,38 @@ export function classifyPredicate(expr: string | undefined): PredicateClass {
   return 'unknown';
 }
 
+/**
+ * The custom (non-builtin, non-`auth.uid/jwt/role`) function names a predicate calls, normalized the
+ * same way classification is (masked, identifier quotes stripped, lowercased) — the names a
+ * `function-delegated` verdict hinges on. Returns `undefined` when the predicate cannot be analyzed
+ * (over-length REL-01 guard); a consumer honoring a trusted-function allowlist MUST treat `undefined`
+ * as untrusted (fail secure). Shares the exact masking/builtin/auth-call knowledge of
+ * `classifyPredicate`, so the two can never drift.
+ */
+export function customCallsIn(expr: string | undefined): readonly string[] | undefined {
+  if (expr === undefined) {
+    return [];
+  }
+  if (expr.length > MAX_CLASSIFY_LEN) {
+    return undefined;
+  }
+  const normalized = stripIdentifierQuotes(maskForClassification(expr))
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  const out: string[] = [];
+  const callRe = /([a-z_][\w.]{0,255})\s*\(/g;
+  let m: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: idiomatic global-regex iteration
+  while ((m = callRe.exec(normalized)) !== null) {
+    const name = m[1] ?? '';
+    if (!KNOWN_AUTH_CALLS.has(name) && !SAFE_BUILTINS.has(name) && !out.includes(name)) {
+      out.push(name);
+    }
+  }
+  return out;
+}
+
 // ── Effective policy class ─────────────────────────────────────────────────────────────────────────
 
 /**

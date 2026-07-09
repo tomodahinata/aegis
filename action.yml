@@ -1,5 +1,5 @@
 name: 'Aegis Security Scan'
-description: 'Run the Aegis application-layer security scanner in CI — SARIF output, GitHub annotations, and a failing status on findings.'
+description: 'Run the Aegis application-layer security scanner in CI — SARIF output, GitHub annotations, a failing status on findings, and an optional RLS access-delta PR comment.'
 author: 'Aegis'
 branding:
   icon: 'shield'
@@ -26,6 +26,22 @@ inputs:
     description: 'Optional path to an aegis-baseline.json (fail only on new findings).'
     required: false
     default: ''
+  policy-diff:
+    description: >-
+      On pull_request events, run `aegis diff` between the PR base and head and post the access
+      delta ("who can newly read/write what") as a sticky PR comment. Runs entirely in YOUR CI with
+      YOUR token — Aegis hosts nothing and is never in the merge path. Requires a checkout with
+      `fetch-depth: 0` (the base ref must be present) and `permissions: pull-requests: write`.
+    required: false
+    default: 'false'
+  policy-diff-trust:
+    description: 'Space-separated authorization helper functions to trust in the diff (e.g. "public.is_member public.is_org_admin").'
+    required: false
+    default: ''
+  github-token:
+    description: 'Token used to post the policy-diff PR comment (defaults to the workflow token).'
+    required: false
+    default: ${{ github.token }}
 
 runs:
   using: 'composite'
@@ -40,3 +56,49 @@ runs:
           ${{ inputs.baseline != '' && format('--baseline {0}', inputs.baseline) || '' }} \
           --sarif-out "${{ inputs.sarif-file }}" \
           --annotations
+
+    - name: RLS access delta (aegis diff)
+      # Advisory by default: the diff exits 1 only on high-severity deltas, and even then the
+      # comment is posted first so reviewers see WHY. Gate merges via branch protection on this
+      # job if you want enforcement — the decision stays in your repo settings, not in Aegis.
+      if: ${{ inputs.policy-diff == 'true' && github.event_name == 'pull_request' }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        TRUST: ${{ inputs.policy-diff-trust }}
+      run: |
+        set -o pipefail
+        # Validate each trusted-function token as a (schema-qualified) SQL identifier and pass the flags
+        # as a QUOTED array. An unvalidated, unquoted expansion would let a token inject extra CLI flags
+        # (e.g. a second --base pointing at a ref with no delta, silently suppressing a real widening).
+        trust_flags=()
+        for fn in $TRUST; do
+          if ! printf '%s' "$fn" | grep -qE '^[A-Za-z_][A-Za-z0-9_.]*$'; then
+            echo "::error::invalid policy-diff-trust token: '$fn' (must be a SQL identifier)"; exit 2
+          fi
+          trust_flags+=(--trust "$fn")
+        done
+        # Run the diff first so its exit code (not the comment plumbing) decides the step outcome.
+        set +e
+        npx --yes @aegiskit/cli diff --base "$BASE_SHA" "${trust_flags[@]}" --format markdown \
+          > aegis-diff.md 2> aegis-diff.err
+        diff_exit=$?
+        set -e
+        if [ $diff_exit -ge 2 ]; then
+          echo "::error::aegis diff failed (exit $diff_exit)"; cat aegis-diff.err >&2; exit $diff_exit
+        fi
+        # Sticky comment: update the existing marker comment if present, else create one.
+        marker='<!-- aegis-policy-diff -->'
+        existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+          --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n1 || true)
+        if [ -n "$existing" ]; then
+          gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" \
+            -F body=@aegis-diff.md > /dev/null
+        else
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -F body=@aegis-diff.md > /dev/null
+        fi
+        exit $diff_exit

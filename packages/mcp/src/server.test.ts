@@ -43,10 +43,14 @@ function firstText(result: unknown): string {
 }
 
 describe('Aegis MCP server', () => {
-  it('advertises scan_project and explain_finding', async () => {
+  it('advertises scan_project, explain_finding, and explain_policy_diff', async () => {
     const client = await connect();
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['explain_finding', 'scan_project']);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      'explain_finding',
+      'explain_policy_diff',
+      'scan_project',
+    ]);
   });
 
   it('scan_project returns a prioritized summary an agent can act on', async () => {

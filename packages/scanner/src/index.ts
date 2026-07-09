@@ -44,8 +44,23 @@ export { type ScanOptions, scan } from './engine';
 export { applyTextEdits, type FilePlan, planFileFixes } from './fix';
 export { parseSource } from './internal/ast';
 export { findTaintFlows, traceOf } from './internal/dataflow';
-export type { GrantInfo, PolicyInfo, RlsModel, SqlLocation, TableInfo } from './internal/sql/model';
+export type {
+  GrantInfo,
+  PolicyCommand,
+  PolicyInfo,
+  PolicySchema,
+  RlsModel,
+  SqlLocation,
+  SqlSource,
+  TableInfo,
+  UninterpretedStatement,
+} from './internal/sql/model';
 export { buildRlsModel } from './internal/sql/model';
+export {
+  customCallsIn,
+  effectivePolicyClass,
+  type PredicateClass,
+} from './internal/sql/predicate';
 export type {
   SinkCategory,
   TaintFlow,

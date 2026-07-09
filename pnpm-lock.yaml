@@ -163,6 +163,9 @@ importers:
       '@aegiskit/dast':
         specifier: workspace:*
         version: link:../dast
+      '@aegiskit/policy-diff':
+        specifier: workspace:*
+        version: link:../policy-diff
       '@aegiskit/scanner':
         specifier: workspace:*
         version: link:../scanner
@@ -181,7 +184,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(jsdom@29.1.1)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4))
+        version: 4.1.9(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(jsdom@29.1.1)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.22.4))
 
   packages/core:
     dependencies:
@@ -250,6 +253,9 @@ importers:
       '@aegiskit/cli':
         specifier: workspace:*
         version: link:../cli
+      '@aegiskit/policy-diff':
+        specifier: workspace:*
+        version: link:../policy-diff
       '@aegiskit/scanner':
         specifier: workspace:*
         version: link:../scanner
@@ -271,7 +277,7 @@ importers:
         version: 6.0.3
       vitest:
         specifier: 'catalog:'
-        version: 4.1.9(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(jsdom@29.1.1)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.22.4))
+        version: 4.1.9(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(jsdom@29.1.1)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4))
 
   packages/next:
     dependencies:
@@ -318,6 +324,28 @@ importers:
       '@aegiskit/core':
         specifier: workspace:*
         version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.0.1
+      fast-check:
+        specifier: 'catalog:'
+        version: 4.8.0
+      tsup:
+        specifier: 'catalog:'
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.15)(tsx@4.22.4)(typescript@6.0.3)
+      typescript:
+        specifier: 'catalog:'
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.9(@types/node@26.0.1)(@vitest/coverage-v8@4.1.9)(jsdom@29.1.1)(vite@8.1.0(@types/node@26.0.1)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4))
+
+  packages/policy-diff:
+    dependencies:
+      '@aegiskit/scanner':
+        specifier: workspace:*
+        version: link:../scanner
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

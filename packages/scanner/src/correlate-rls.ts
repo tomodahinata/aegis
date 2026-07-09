@@ -42,6 +42,9 @@ function weakTables(model: RlsModel): Map<string, WeakReason> {
     }
   }
   for (const policy of model.policies) {
+    if (policy.schema !== 'public') {
+      continue; // a storage.objects policy must never mark a public table named `objects` weak
+    }
     if (policy.restrictive) {
       continue;
     }

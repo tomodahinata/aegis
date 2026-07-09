@@ -8,5 +8,11 @@ export default defineConfig({
   treeshake: true,
   target: 'es2022',
   outDir: 'dist',
-  external: ['@aegiskit/cli', '@aegiskit/scanner', '@modelcontextprotocol/sdk', 'zod'],
+  external: [
+    '@aegiskit/cli',
+    '@aegiskit/policy-diff',
+    '@aegiskit/scanner',
+    '@modelcontextprotocol/sdk',
+    'zod',
+  ],
 });

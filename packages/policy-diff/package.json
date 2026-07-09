@@ -1,12 +1,10 @@
 {
-  "name": "@aegiskit/mcp",
+  "name": "@aegiskit/policy-diff",
   "version": "0.0.0",
-  "description": "Aegis as a Model Context Protocol server — scan and explain Supabase RLS/authz gaps from inside Claude Code, Cursor, and other MCP agents.",
+  "description": "Semantic access diff for Supabase RLS migrations: turns two migration states into a plain-English access delta (who can newly read/write what), fail-safe by design — for PR review, CI gating, and change-management evidence.",
   "license": "MIT",
   "type": "module",
-  "bin": {
-    "aegis-mcp": "./dist/main.js"
-  },
+  "sideEffects": false,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -25,14 +23,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@aegiskit/cli": "workspace:*",
-    "@aegiskit/policy-diff": "workspace:*",
-    "@aegiskit/scanner": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "zod": "catalog:"
+    "@aegiskit/scanner": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "fast-check": "catalog:",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
@@ -42,21 +37,20 @@
   },
   "keywords": [
     "security",
-    "mcp",
-    "model-context-protocol",
-    "claude-code",
-    "cursor",
     "supabase",
     "rls",
-    "nextjs",
+    "row-level-security",
+    "policy-diff",
+    "access-control",
+    "ci",
     "appsec"
   ],
   "author": "tomodahinata",
-  "homepage": "https://github.com/tomodahinata/aegis/tree/main/packages/mcp#readme",
+  "homepage": "https://github.com/tomodahinata/aegis/tree/main/packages/policy-diff#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/tomodahinata/aegis.git",
-    "directory": "packages/mcp"
+    "directory": "packages/policy-diff"
   },
   "bugs": "https://github.com/tomodahinata/aegis/issues",
   "publishConfig": {

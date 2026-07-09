@@ -1,0 +1,4 @@
+# Transient study data — clones and per-repo measurement rows (ethics + size: never commit
+# third-party clones or repo-identifying rows). The durable artifacts are the script and the
+# aggregate results recorded in README.md.
+data/

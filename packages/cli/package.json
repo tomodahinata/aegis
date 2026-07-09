@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@aegiskit/dast": "workspace:*",
+    "@aegiskit/policy-diff": "workspace:*",
     "@aegiskit/scanner": "workspace:*",
     "picocolors": "^1.1.1"
   },

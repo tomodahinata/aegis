@@ -69,6 +69,15 @@ export function defaultAliases(root: string): Record<string, string> | undefined
 const SQL_AUTHORITY_DIR = /[/\\]supabase[/\\](?:migrations|schemas)[/\\]/;
 const SQL_NON_AUTHORITY = /\.test\.sql$|_test\.sql$|(?:^|[/\\])seed(?:s)?[./\\]/i;
 
+/**
+ * Is `path` a source-of-truth Supabase schema file (see the rationale above)? The single authority
+ * shared by directory discovery here and git-ref listing in `aegis diff`, so the two can never
+ * disagree about what SQL counts.
+ */
+export function isAuthoritativeSqlPath(path: string): boolean {
+  return SQL_EXT.test(path) && SQL_AUTHORITY_DIR.test(path) && !SQL_NON_AUTHORITY.test(path);
+}
+
 /** Collect source-of-truth Supabase schema `.sql` files (migrations + declarative schemas). */
 export function discoverSqlFiles(root: string): string[] {
   const out: string[] = [];
@@ -87,11 +96,7 @@ export function discoverSqlFiles(root: string): string[] {
         }
       } else {
         const full = join(dir, entry.name);
-        if (
-          SQL_EXT.test(entry.name) &&
-          SQL_AUTHORITY_DIR.test(full) &&
-          !SQL_NON_AUTHORITY.test(full)
-        ) {
+        if (isAuthoritativeSqlPath(full)) {
           out.push(full);
         }
       }

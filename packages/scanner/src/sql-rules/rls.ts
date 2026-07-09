@@ -75,6 +75,9 @@ export const writePolicyWithoutCheck: SqlRule = {
   },
   check(ctx) {
     for (const policy of ctx.model.policies) {
+      if (policy.schema !== 'public') {
+        continue; // rules are calibrated for app tables; storage policies are modeled for diffing only
+      }
       if (policy.restrictive) {
         continue; // RESTRICTIVE narrows access; absence of WITH CHECK is not a grant
       }
@@ -105,6 +108,9 @@ export const permissiveWritePolicy: SqlRule = {
   },
   check(ctx) {
     for (const policy of ctx.model.policies) {
+      if (policy.schema !== 'public') {
+        continue; // e.g. `WITH CHECK (true)` on a public-upload storage bucket is idiomatic, not a gap
+      }
       if (policy.restrictive) {
         continue;
       }
@@ -142,6 +148,9 @@ export const policyNotOwnerScoped: SqlRule = {
   },
   check(ctx) {
     for (const policy of ctx.model.policies) {
+      if (policy.schema !== 'public') {
+        continue; // storage policies scope by bucket, not ownership column; modeled for diffing only
+      }
       if (policy.restrictive) {
         continue; // RESTRICTIVE narrows access; it never grants it, so it is never the gap
       }
@@ -218,6 +227,9 @@ export const anonWritablePolicy: SqlRule = {
   },
   check(ctx) {
     for (const policy of ctx.model.policies) {
+      if (policy.schema !== 'public') {
+        continue; // anon-writable storage buckets are a bucket-design choice, not this rule's gap
+      }
       if (policy.restrictive) {
         continue; // RESTRICTIVE only narrows access; it never grants the write
       }

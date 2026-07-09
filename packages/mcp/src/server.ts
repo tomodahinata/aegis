@@ -11,6 +11,7 @@
 import { resolve } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { explainPolicyDiff } from './diff-service';
 import {
   DEFAULT_SCAN_LIMIT,
   explainFinding,
@@ -160,6 +161,42 @@ export function createAegisMcpServer(): McpServer {
         return textResult(formatDetail(detail));
       } catch (error) {
         return toolFailure('explain_finding', cwd, error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'explain_policy_diff',
+    {
+      title: 'Explain the RLS access delta of the current change',
+      description:
+        'Compute the reproducible semantic access diff of Supabase RLS (policies, RLS state, table ' +
+        'grants) between a git base ref and the working tree: who can newly read or write what. ' +
+        'Verdicts are fail-closed (anything unverifiable is REQUIRES REVIEW, never silence) — cite ' +
+        'this instead of guessing what a migration does. It reasons about the SHAPE of repo-managed ' +
+        'SQL only and never claims a migration is "safe". Read-only (git rev-parse/ls-tree/show).',
+      inputSchema: {
+        base: z.string().describe('Git ref to compare FROM (e.g. "origin/main", "main", a SHA).'),
+        path: z
+          .string()
+          .optional()
+          .describe('Project root (a git worktree). Defaults to the server working directory.'),
+        trustedFunctions: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'Authorization helper functions the team vouches for (e.g. ["public.is_member"]) — ' +
+              'their policies participate as delegated checks instead of forcing review.',
+          ),
+      },
+    },
+    (args) => {
+      const cwd = resolve(args.path ?? process.cwd());
+      try {
+        const result = explainPolicyDiff(cwd, args.base, args.trustedFunctions ?? []);
+        return textResult(result.markdown);
+      } catch (error) {
+        return toolFailure('explain_policy_diff', cwd, error);
       }
     },
   );

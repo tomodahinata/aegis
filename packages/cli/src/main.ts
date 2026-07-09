@@ -2,6 +2,7 @@
 import { parseArgs } from 'node:util';
 import type { Severity } from '@aegiskit/scanner';
 import { runCi } from './commands/ci';
+import { type DiffFormat, runDiff } from './commands/diff';
 import { runDoctor } from './commands/doctor';
 import { runFix } from './commands/fix';
 import { runInit } from './commands/init';
@@ -24,6 +25,7 @@ Commands:
   doctor    Audit effective security config (optionally against a running URL)
   probe     Dynamically probe a RUNNING app you own; confirm findings at runtime
   report    Map findings to SOC 2 / ISO 27001 control evidence (reference mapping)
+  diff      Semantic access diff of Supabase RLS between two git refs (PR gate)
 
 [path] is an optional directory to operate on (default: --cwd, else current directory).
 
@@ -52,8 +54,15 @@ Options:
   --allow-remote                 (probe) allow a non-loopback target (with --i-own)
   --i-own <statement>            (probe) ownership attestation required for a remote target
   --max-requests <n>             (probe) hard cap on total requests (default 500)
+  --base <ref>                   (diff) git ref to compare FROM (e.g. origin/main) — required
+  --head <ref>                   (diff) git ref to compare TO (default: the working tree)
+  --trust <fn>                   (diff, repeatable) trusted authorization helper, e.g. public.is_member
   --cwd <dir>                    project root (default: current directory)
   --help                         show this help
+
+Diff verdicts: WIDENING (access grew), narrowing, REQUIRES REVIEW (not mechanically comparable —
+fails closed, never silently "no change"). --format markdown emits a PR-comment-ready body.
+Exit: high-severity deltas → 1; with --strict, notice-level widenings/reviews also → 1.
 
 Probe targets default to localhost only; a remote host requires --allow-remote AND --i-own.
 
@@ -88,11 +97,26 @@ function str(value: string | boolean | undefined): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+const DIFF_FORMATS: readonly string[] = ['pretty', 'markdown', 'json'];
+
+function parseDiffFormat(value: string | undefined): DiffFormat {
+  if (value === undefined) {
+    return 'pretty';
+  }
+  if (DIFF_FORMATS.includes(value)) {
+    return value as DiffFormat;
+  }
+  throw new UsageError(`diff supports --format pretty|markdown|json (got "${value}")`);
+}
+
 async function main(): Promise<number> {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
       format: { type: 'string' },
+      base: { type: 'string' },
+      head: { type: 'string' },
+      trust: { type: 'string', multiple: true },
       severity: { type: 'string' },
       strict: { type: 'boolean', default: false },
       'no-color': { type: 'boolean', default: false },
@@ -215,6 +239,21 @@ async function main(): Promise<number> {
         ...(out !== undefined ? { out } : {}),
         ...(history !== undefined ? { history } : {}),
         ...(commit !== undefined ? { commit } : {}),
+      });
+    }
+    case 'diff': {
+      const base = str(values.base);
+      if (base === undefined) {
+        throw new UsageError('diff requires --base <ref>, e.g. `aegis diff --base origin/main`');
+      }
+      const head = str(values.head);
+      return runDiff({
+        cwd,
+        base,
+        format: parseDiffFormat(str(values.format)),
+        trust: values.trust ?? [],
+        strict,
+        ...(head !== undefined ? { head } : {}),
       });
     }
     default:
