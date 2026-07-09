@@ -43,6 +43,17 @@ inputs:
     required: false
     default: ${{ github.token }}
 
+outputs:
+  policy-diff-conclusion:
+    description: >-
+      Result of the RLS access-delta gate when `policy-diff: true` (empty otherwise): `action-required`
+      when high-severity widenings were found (the diff step also exits non-zero) or `clear` when none
+      were. Read it from a later step with `if: always()`, since the gate step fails the job on
+      `action-required`. For the full four-valued verdict
+      (`no-change`/`neutral`/`attention`/`action-required`) run `aegis diff --format json` and read
+      `.summary.conclusion`.
+    value: ${{ steps.rls-diff.outputs.conclusion }}
+
 runs:
   using: 'composite'
   steps:
@@ -58,6 +69,7 @@ runs:
           --annotations
 
     - name: RLS access delta (aegis diff)
+      id: rls-diff
       # Advisory by default: the diff exits 1 only on high-severity deltas, and even then the
       # comment is posted first so reviewers see WHY. Gate merges via branch protection on this
       # job if you want enforcement — the decision stays in your repo settings, not in Aegis.
@@ -90,6 +102,10 @@ runs:
         if [ $diff_exit -ge 2 ]; then
           echo "::error::aegis diff failed (exit $diff_exit)"; cat aegis-diff.err >&2; exit $diff_exit
         fi
+        # Expose the gate outcome so downstream steps can react. `${GITHUB_OUTPUT:-/dev/null}` keeps
+        # this fail-safe if the file is unset (e.g. a local `act` run).
+        if [ $diff_exit -eq 1 ]; then conclusion=action-required; else conclusion=clear; fi
+        echo "conclusion=$conclusion" >> "${GITHUB_OUTPUT:-/dev/null}"
         # Sticky comment: update the existing marker comment if present, else create one.
         marker='<!-- aegis-policy-diff -->'
         existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \

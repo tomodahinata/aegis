@@ -60,6 +60,13 @@ function git(cwd: string, args: readonly string[]): string {
 
 /** The authoritative Supabase SQL sources at `ref`, read via `git show` (no checkout, no clone). */
 export function sourcesAtRef(cwd: string, ref: string): SqlSource[] {
+  // Defense-in-depth: reject a ref that could be read as a git OPTION before it reaches any git
+  // argument position (it is interpolated into `rev-parse`, `ls-tree`, and `show`). `rev-parse
+  // --verify` below rejects these too, but asserting it here means a future refactor that reorders
+  // the git calls cannot silently reopen argument injection.
+  if (ref.startsWith('-')) {
+    throw new UsageError(`invalid git ref "${ref}" — a ref must not start with "-"`);
+  }
   // Resolve first so a typo'd ref fails with a usage error, not a confusing ls-tree message.
   git(cwd, ['rev-parse', '--verify', `${ref}^{commit}`]);
   // Paths are repo-root-relative; scope to the invocation directory so a monorepo diff of one app

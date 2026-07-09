@@ -56,6 +56,9 @@ export type {
   UninterpretedStatement,
 } from './internal/sql/model';
 export { buildRlsModel } from './internal/sql/model';
+// `customCallsIn` and `PredicateClass` are part of this package's PUBLIC contract because
+// `@aegiskit/policy-diff` builds its trust allowlist and breadth lattice on them. Treat any change
+// to their shape or semantics as a breaking change for that package (and add a changeset for both).
 export {
   customCallsIn,
   effectivePolicyClass,

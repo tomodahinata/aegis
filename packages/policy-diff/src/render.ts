@@ -5,6 +5,7 @@
 
 import type { AccessDelta, DeltaKind } from './diff';
 import { summarizeDeltas } from './diff';
+import { qualifiedTable } from './policy';
 
 /** Marker embedded in the output so a bot can find-and-update its own sticky comment. */
 export const COMMENT_MARKER = '<!-- aegis-policy-diff -->';
@@ -94,7 +95,7 @@ export function renderDeltaMarkdown(
 
   lines.push('| | Table | Change | Verdict |', '|---|---|---|---|');
   for (const d of sorted) {
-    const table = d.schema === 'public' ? d.table : `${d.schema}.${d.table}`;
+    const table = qualifiedTable(d.schema, d.table);
     const icon = d.severity === 'high' ? '🔴' : KIND_ICON[d.kind];
     lines.push(`| ${icon} | ${code(table)} | ${escapeCell(d.summary)} | ${KIND_BADGE[d.kind]} |`);
   }

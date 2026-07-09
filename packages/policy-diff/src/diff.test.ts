@@ -105,6 +105,22 @@ describe('diffAccess — invariants (fast-check)', () => {
     );
   });
 
+  it('fail-safe: a policy added in head that calls an UNtrusted custom function is never swallowed', () => {
+    // `public.mystery_fn` is on no allowlist ⇒ function-delegated ⇒ unverifiable for the caller, so a
+    // policy that newly grants access through it must surface as requires-review/widening, never as a
+    // neutral/narrowing-only diff (which would falsely tell a reviewer nothing widened).
+    fc.assert(
+      fc.property(schemaArb, fc.constantFrom('docs', 'posts'), (baseSql, table) => {
+        const headSql = `${baseSql}
+          create policy mystery_policy on public.${table} for select to authenticated using (public.mystery_fn(id));`;
+        const deltas = diffAccess(model(baseSql), model(headSql));
+        expect(deltas.some((d) => d.kind === 'requires-review' || d.kind === 'widening')).toBe(
+          true,
+        );
+      }),
+    );
+  });
+
   it('monotone claim safety: removing ONE permissive policy never produces a widening', () => {
     fc.assert(
       fc.property(fc.array(policyArb, { minLength: 1, maxLength: 5 }), (raw) => {

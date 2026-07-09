@@ -599,14 +599,16 @@ export function customCallsIn(expr: string | undefined): readonly string[] | und
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+  const seen = new Set<string>();
   const out: string[] = [];
   const callRe = /([a-z_][\w.]{0,255})\s*\(/g;
   let m: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: idiomatic global-regex iteration
   while ((m = callRe.exec(normalized)) !== null) {
     const name = m[1] ?? '';
-    if (!KNOWN_AUTH_CALLS.has(name) && !SAFE_BUILTINS.has(name) && !out.includes(name)) {
-      out.push(name);
+    if (!KNOWN_AUTH_CALLS.has(name) && !SAFE_BUILTINS.has(name) && !seen.has(name)) {
+      seen.add(name);
+      out.push(name); // first-occurrence order preserved; the Set only replaces the O(k) dedup scan
     }
   }
   return out;

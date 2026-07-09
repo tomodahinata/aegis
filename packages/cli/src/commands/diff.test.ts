@@ -157,4 +157,18 @@ describe('aegis diff (end-to-end against a real git repo)', () => {
       runDiff({ cwd: repo.root, base: 'no-such-ref', format: 'pretty', trust: [], strict: false }),
     ).toThrow(UsageError);
   });
+
+  it('rejects a ref that could be read as a git option (argument-injection guard, SEC-02)', () => {
+    repo.write('0001_init.sql', BASE_SQL);
+    repo.commit('init');
+    expect(() =>
+      runDiff({
+        cwd: repo.root,
+        base: '--upload-pack=touch /tmp/x',
+        format: 'pretty',
+        trust: [],
+        strict: false,
+      }),
+    ).toThrow(/must not start with/);
+  });
 });

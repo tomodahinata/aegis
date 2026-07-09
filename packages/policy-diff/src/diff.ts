@@ -2,6 +2,10 @@
  * Semantic access diff between two Supabase RLS models — the answer to the one question a migration
  * PR review actually asks: **did this change widen who can read or write what?**
  *
+ * This module is the ORCHESTRATOR; the load-bearing logic lives in focused, independently-testable
+ * neighbours: the row-breadth lattice (`./breadth`), transition classification (`./classify`),
+ * trusted-function resolution (`./trust`), and per-policy transition extraction (`./policy`).
+ *
  * Trust contract (the product's whole value rests on it):
  *
  *  - `widening` is claimed only when the after-rows are a SUPERSET-or-equal of the before-rows under
@@ -19,45 +23,33 @@
 
 import type {
   GrantInfo,
-  PolicyCommand,
   PolicyInfo,
   PolicySchema,
-  PredicateClass,
   RlsModel,
   SqlLocation,
   UninterpretedStatement,
 } from '@aegiskit/scanner';
-import { customCallsIn } from '@aegiskit/scanner';
+import { isAnonLike } from './breadth';
+import { type DeltaKind, type DeltaSeverity, worst } from './classify';
+import { fingerprint } from './fingerprint';
+import {
+  type AccessTransition,
+  describeTransitions,
+  type PolicySummary,
+  policyIdentity,
+  policyTransitions,
+  qualifiedTable,
+  samePolicy,
+  toSummary,
+} from './policy';
+import { type DiffOptions, makeTrust } from './trust';
 
-export type DeltaKind = 'widening' | 'narrowing' | 'neutral' | 'requires-review';
-
-/** `high`: anon-reachable or all-rows exposure or an RLS/parse blind spot. `notice`: everything else. */
-export type DeltaSeverity = 'high' | 'notice';
-
-/** The concrete commands a policy's `all` expands to. */
-const COMMANDS: readonly Exclude<PolicyCommand, 'all'>[] = ['select', 'insert', 'update', 'delete'];
-type ConcreteCommand = (typeof COMMANDS)[number];
-
-export interface PolicySummary {
-  readonly name: string;
-  readonly command: PolicyCommand;
-  readonly roles: readonly string[];
-  readonly restrictive: boolean;
-  readonly usingClass: PredicateClass;
-  readonly checkClass: PredicateClass;
-  readonly usingExpr?: string;
-  readonly checkExpr?: string;
-}
-
-/** One (role, command) access transition inside a policy change — the evidence behind the verdict. */
-export interface AccessTransition {
-  readonly role: string;
-  readonly command: ConcreteCommand;
-  readonly before: Breadth;
-  readonly after: Breadth;
-  readonly kind: DeltaKind;
-  readonly severity: DeltaSeverity;
-}
+// Re-export the public vocabulary. The split into focused modules is an internal refactor; `./diff`
+// stays the single entry point the package index and the tests import from.
+export type { Breadth } from './breadth';
+export type { DeltaKind, DeltaSeverity } from './classify';
+export type { AccessTransition, PolicySummary } from './policy';
+export type { DiffOptions } from './trust';
 
 export type DeltaChange =
   | { readonly type: 'policy-added'; readonly policy: PolicySummary }
@@ -95,17 +87,6 @@ export interface AccessDelta {
   readonly loc?: SqlLocation;
 }
 
-export interface DiffOptions {
-  /**
-   * Function names (normalized: lowercased, optionally schema-qualified as written in SQL) the team
-   * vouches for as correct authorization checks — e.g. `['public.is_member', 'is_org_admin']`. A
-   * `function-delegated` predicate whose EVERY custom call is trusted participates in the lattice as
-   * a delegated check instead of forcing `requires-review`. Unknown or unanalyzable calls stay
-   * untrusted (fail secure).
-   */
-  readonly trustedFunctions?: readonly string[];
-}
-
 export interface DeltaSummary {
   readonly widening: number;
   readonly narrowing: number;
@@ -119,359 +100,6 @@ export interface DeltaSummary {
    */
   readonly conclusion: 'action-required' | 'attention' | 'neutral' | 'no-change';
 }
-
-// ── Breadth: what rows a ROLE can touch under a predicate class ───────────────────────────────────
-
-/**
- * Row-breadth of a predicate class as seen by one role. `unverifiable` poisons any comparison into
- * `requires-review`. The subset lattice used for verdicts: none ⊂ {own, state, delegated} ⊂ all —
- * own/state/delegated are pairwise INCOMPARABLE (an org-membership check is neither wider nor
- * narrower than an owner binding), which is exactly where fail-safe review lives.
- */
-export type Breadth = 'none' | 'own' | 'state' | 'delegated' | 'all' | 'unverifiable';
-
-const isAnonLike = (role: string): boolean => role === 'anon' || role === 'public';
-
-function breadthOf(cls: PredicateClass, role: string, trusted: boolean): Breadth {
-  if (isAnonLike(role)) {
-    // An anonymous caller has no session: owner bindings, session proofs, and role gates all
-    // evaluate to no rows. Row-state predicates and `true` are the anon-satisfiable classes.
-    switch (cls) {
-      case 'unconditional':
-        return 'all';
-      case 'unknown':
-        return 'state';
-      case 'function-delegated':
-        // Even a TRUSTED helper is only vouched as "a correct authorization check" — for anon we
-        // assume it denies (like role-delegated); untrusted stays unverifiable.
-        return trusted ? 'none' : 'unverifiable';
-      case 'absent':
-        return 'unverifiable';
-      default:
-        return 'none'; // deny / owner-bound / authenticated-only / role-delegated
-    }
-  }
-  switch (cls) {
-    case 'deny':
-      return 'none';
-    case 'owner-bound':
-      return 'own';
-    case 'unknown':
-      return 'state';
-    case 'role-delegated':
-      return 'delegated';
-    case 'function-delegated':
-      return trusted ? 'delegated' : 'unverifiable';
-    case 'authenticated-only':
-      return 'all'; // every logged-in user: for an authenticated role this IS all rows
-    case 'unconditional':
-      return 'all';
-    case 'absent':
-      return 'unverifiable';
-    default: {
-      const exhaustive: never = cls;
-      return exhaustive;
-    }
-  }
-}
-
-/** Strictly-below relation of the subset lattice (none ⊂ mid ⊂ all; mids incomparable). */
-function isSubset(a: Breadth, b: Breadth): boolean {
-  if (a === b) {
-    return true;
-  }
-  if (a === 'none') {
-    return true;
-  }
-  if (b === 'all') {
-    return a === 'own' || a === 'state' || a === 'delegated';
-  }
-  return false;
-}
-
-// ── Policy → per-command governing classes ────────────────────────────────────────────────────────
-
-/** Does `policy` cover concrete command `c`? */
-function covers(policy: PolicySummary, c: ConcreteCommand): boolean {
-  return policy.command === 'all' || policy.command === c;
-}
-
-/**
- * The predicate class governing command `c`. INSERT is governed by WITH CHECK (falling back to
- * USING inside a FOR ALL policy — PostgreSQL reuses USING as the check when WITH CHECK is omitted);
- * everything else by USING with WITH CHECK as the fallback. Mirrors the scanner's
- * `effectivePolicyClass`, extended to per-command evaluation of `FOR ALL` policies.
- */
-function governingClass(policy: PolicySummary, c: ConcreteCommand): PredicateClass {
-  if (c === 'insert') {
-    return policy.checkClass !== 'absent' ? policy.checkClass : policy.usingClass;
-  }
-  return policy.usingClass !== 'absent' ? policy.usingClass : policy.checkClass;
-}
-
-/** The WRITE-side (post-image) class for a write command — the SEC-01 second gate. */
-function writeCheckClass(policy: PolicySummary, c: ConcreteCommand): PredicateClass | undefined {
-  if (c === 'select' || c === 'insert') {
-    return undefined; // insert's check IS its governing class; select has no post-image
-  }
-  return policy.checkClass !== 'absent' ? policy.checkClass : policy.usingClass;
-}
-
-/** Roles a policy applies to; an empty `TO` list means PostgreSQL's `public` (everyone). */
-function rolesOf(policy: PolicySummary): readonly string[] {
-  return policy.roles.length === 0 ? ['public'] : policy.roles;
-}
-
-/**
- * The role PERSPECTIVES to evaluate a policy under. `public` means EVERYONE, so it must be judged
- * from both the anonymous and the authenticated viewpoint — evaluating it only as "anon-like" made
- * an owner-bound→authenticated-only widening invisible (both classes are `none` for anon).
- */
-function evaluationRoles(policy: PolicySummary): readonly string[] {
-  const out = new Set<string>();
-  for (const role of rolesOf(policy)) {
-    if (role === 'public') {
-      out.add('anon');
-      out.add('authenticated');
-    } else {
-      out.add(role);
-    }
-  }
-  return [...out];
-}
-
-/** Does the policy apply to a caller holding `role`? A `public` policy applies to every role. */
-function appliesTo(policy: PolicySummary, role: string): boolean {
-  const roles = rolesOf(policy);
-  return roles.includes(role) || roles.includes('public');
-}
-
-const normalizeExpr = (expr: string | undefined): string =>
-  (expr ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
-
-// ── Trust ─────────────────────────────────────────────────────────────────────────────────────────
-
-function makeTrust(options?: DiffOptions): (expr: string | undefined) => boolean {
-  const allow = new Set((options?.trustedFunctions ?? []).map((f) => f.toLowerCase()));
-  if (allow.size === 0) {
-    return () => false;
-  }
-  return (expr) => {
-    const calls = customCallsIn(expr);
-    if (calls === undefined) {
-      return false; // unanalyzable ⇒ untrusted (fail secure)
-    }
-    return (
-      calls.length > 0 &&
-      calls.every((name) => allow.has(name) || allow.has(name.replace(/^public\./, '')))
-    );
-  };
-}
-
-// ── Transition classification ─────────────────────────────────────────────────────────────────────
-
-interface Verdict {
-  readonly kind: DeltaKind;
-  readonly severity: DeltaSeverity;
-}
-
-function classifyTransition(
-  role: string,
-  before: Breadth,
-  after: Breadth,
-  exprChanged: boolean,
-): Verdict {
-  if (before === 'unverifiable' || after === 'unverifiable') {
-    return { kind: 'requires-review', severity: isAnonLike(role) ? 'high' : 'notice' };
-  }
-  if (before === after) {
-    // Same breadth but a different predicate (e.g. `is_admin()` → `is_member()`, or the ownership
-    // column changed): the shape says "comparable", the text says "semantics moved" — review it.
-    if (exprChanged && (before === 'own' || before === 'state' || before === 'delegated')) {
-      return { kind: 'requires-review', severity: 'notice' };
-    }
-    return { kind: 'neutral', severity: 'notice' };
-  }
-  if (isSubset(before, after)) {
-    const anonGain = isAnonLike(role) && after !== 'none';
-    const high = after === 'all' || anonGain;
-    return { kind: 'widening', severity: high ? 'high' : 'notice' };
-  }
-  if (isSubset(after, before)) {
-    return { kind: 'narrowing', severity: 'notice' };
-  }
-  return { kind: 'requires-review', severity: 'notice' }; // incomparable (own↔state↔delegated)
-}
-
-/** Verdict dominance for aggregating transitions into one policy-level verdict. */
-const KIND_RANK: Record<DeltaKind, number> = {
-  'requires-review': 3,
-  widening: 2,
-  narrowing: 1,
-  neutral: 0,
-};
-
-function worst(verdicts: readonly Verdict[]): Verdict {
-  let kind: DeltaKind = 'neutral';
-  let severity: DeltaSeverity = 'notice';
-  for (const v of verdicts) {
-    if (KIND_RANK[v.kind] > KIND_RANK[kind]) {
-      kind = v.kind;
-    }
-    if (v.severity === 'high' && (v.kind === 'widening' || v.kind === 'requires-review')) {
-      severity = 'high';
-    }
-  }
-  return { kind, severity };
-}
-
-// ── Fingerprint (identity, not security) ──────────────────────────────────────────────────────────
-
-/** FNV-1a 64-bit over the delta's stable identity — dedup/stickiness only, not a security primitive. */
-function fingerprint(parts: readonly (string | number)[]): string {
-  let h = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const s = parts.join('\x00');
-  for (let i = 0; i < s.length; i += 1) {
-    h ^= BigInt(s.charCodeAt(i));
-    h = (h * prime) & 0xffffffffffffffffn;
-  }
-  return h.toString(16).padStart(16, '0');
-}
-
-// ── Policy comparison ─────────────────────────────────────────────────────────────────────────────
-
-function toSummary(p: PolicyInfo): PolicySummary {
-  return {
-    name: p.name,
-    command: p.command,
-    roles: p.roles,
-    restrictive: p.restrictive,
-    usingClass: p.usingClass,
-    checkClass: p.checkClass,
-    ...(p.usingExpr !== undefined ? { usingExpr: p.usingExpr } : {}),
-    ...(p.checkExpr !== undefined ? { checkExpr: p.checkExpr } : {}),
-  };
-}
-
-const policyIdentity = (p: PolicyInfo): string => `${p.schema}\x00${p.table}\x00${p.name}`;
-
-function samePolicy(a: PolicySummary, b: PolicySummary): boolean {
-  return (
-    a.command === b.command &&
-    a.restrictive === b.restrictive &&
-    [...rolesOf(a)].sort().join(',') === [...rolesOf(b)].sort().join(',') &&
-    a.usingClass === b.usingClass &&
-    a.checkClass === b.checkClass &&
-    normalizeExpr(a.usingExpr) === normalizeExpr(b.usingExpr) &&
-    normalizeExpr(a.checkExpr) === normalizeExpr(b.checkExpr)
-  );
-}
-
-/**
- * All (role, command) transitions between two states of one policy. `undefined` on either side
- * means the policy does not exist there — which uniformly folds adds, removes, role changes, and
- * command changes into breadth transitions from/to `none`.
- */
-function policyTransitions(
-  before: PolicySummary | undefined,
-  after: PolicySummary | undefined,
-  trust: (expr: string | undefined) => boolean,
-): AccessTransition[] {
-  const roles = new Set<string>([
-    ...(before ? evaluationRoles(before) : []),
-    ...(after ? evaluationRoles(after) : []),
-  ]);
-  const transitions: AccessTransition[] = [];
-  for (const role of roles) {
-    for (const command of COMMANDS) {
-      const evaluate = (p: PolicySummary | undefined): { breadth: Breadth; expr: string } => {
-        if (!p || !covers(p, command) || !appliesTo(p, role)) {
-          return { breadth: 'none', expr: '' };
-        }
-        const gate = governingClass(p, command);
-        const gateExpr = command === 'insert' ? (p.checkExpr ?? p.usingExpr) : p.usingExpr;
-        const gateBreadth = breadthOf(gate, role, trust(gateExpr));
-        // SEC-01: a write command is as wide as the WIDER of its row gate and its post-image check —
-        // `USING (owner) WITH CHECK (authenticated-only)` still lets any user write foreign rows.
-        const check = writeCheckClass(p, command);
-        if (check !== undefined) {
-          const checkBreadth = breadthOf(check, role, trust(p.checkExpr ?? p.usingExpr));
-          const wider =
-            isSubset(gateBreadth, checkBreadth) || checkBreadth === 'unverifiable'
-              ? checkBreadth
-              : gateBreadth;
-          return {
-            breadth: wider,
-            expr: `${normalizeExpr(gateExpr)}|${normalizeExpr(p.checkExpr ?? p.usingExpr)}`,
-          };
-        }
-        return { breadth: gateBreadth, expr: normalizeExpr(gateExpr) };
-      };
-      const b = evaluate(before);
-      const a = evaluate(after);
-      if (b.breadth === 'none' && a.breadth === 'none') {
-        continue;
-      }
-      const verdict = classifyTransition(role, b.breadth, a.breadth, b.expr !== a.expr);
-      if (verdict.kind === 'neutral') {
-        continue;
-      }
-      transitions.push({
-        role,
-        command,
-        before: b.breadth,
-        after: a.breadth,
-        kind: verdict.kind,
-        severity: verdict.severity,
-      });
-    }
-  }
-  return transitions;
-}
-
-// ── Summaries (the human sentences) ───────────────────────────────────────────────────────────────
-
-const BREADTH_LABEL: Record<Breadth, string> = {
-  none: 'no rows',
-  own: 'only rows they own',
-  state: 'rows matching a row-state condition',
-  delegated: 'rows allowed by a delegated check',
-  all: 'ALL rows',
-  unverifiable: 'rows decided by an unverifiable predicate',
-};
-
-function describeTransitions(
-  table: string,
-  transitions: readonly AccessTransition[],
-  fallback: string,
-): string {
-  const dominant = [...transitions].sort(
-    (a, b) =>
-      KIND_RANK[b.kind] - KIND_RANK[a.kind] ||
-      (b.severity === 'high' ? 1 : 0) - (a.severity === 'high' ? 1 : 0) ||
-      // Total-order tie-break so the human summary is reproducible regardless of the role-set
-      // construction order (the leading role/command must not vary across equivalent inputs).
-      a.command.localeCompare(b.command) ||
-      a.role.localeCompare(b.role),
-  )[0];
-  if (!dominant) {
-    return fallback;
-  }
-  const peers = transitions.filter(
-    (t) => t.kind === dominant.kind && t.before === dominant.before && t.after === dominant.after,
-  );
-  const commands = [...new Set(peers.map((t) => t.command.toUpperCase()))].join('/');
-  const roles = [...new Set(peers.map((t) => t.role))].join(', ');
-  const rest = transitions.length - peers.length;
-  const tail = rest > 0 ? ` (+${rest} more transition${rest === 1 ? '' : 's'})` : '';
-  if (dominant.kind === 'requires-review') {
-    return `${commands} for role ${roles} on "${table}" moved from ${BREADTH_LABEL[dominant.before]} to ${BREADTH_LABEL[dominant.after]} — not mechanically comparable, review required${tail}`;
-  }
-  return `role ${roles} could previously ${commands} ${BREADTH_LABEL[dominant.before]} on "${table}"; after this change: ${BREADTH_LABEL[dominant.after]}${tail}`;
-}
-
-// ── The diff ──────────────────────────────────────────────────────────────────────────────────────
 
 export function diffAccess(base: RlsModel, head: RlsModel, options?: DiffOptions): AccessDelta[] {
   const trust = makeTrust(options);
@@ -731,8 +359,11 @@ export function diffAccess(base: RlsModel, head: RlsModel, options?: DiffOptions
     if (excess <= 0) {
       continue;
     }
-    const [kind = '', table = ''] = key.split('\x00');
-    const statementKind = kind as UninterpretedStatement['kind'];
+    // The key is `${kind}\x00${table}` — split on the FIRST NUL so a table name can never leak into
+    // the statement-kind slot, and neither field relies on a masking default.
+    const nul = key.indexOf('\x00');
+    const statementKind = key.slice(0, nul) as UninterpretedStatement['kind'];
+    const table = key.slice(nul + 1);
     const severity: DeltaSeverity =
       statementKind === 'rls-statement' || statementKind === 'policy-statement' ? 'high' : 'notice';
     push(
@@ -750,10 +381,6 @@ export function diffAccess(base: RlsModel, head: RlsModel, options?: DiffOptions
   }
 
   return deltas;
-}
-
-function qualifiedTable(schema: string, table: string): string {
-  return schema === 'public' ? table : `${schema}.${table}`;
 }
 
 export function summarizeDeltas(deltas: readonly AccessDelta[]): DeltaSummary {
