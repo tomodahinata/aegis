@@ -656,6 +656,88 @@ describe('scanSql — final-state migration semantics (DROP/ALTER supersede, no 
   });
 });
 
+describe('scanSql — procedural RLS enable suppresses the CI-blocking table-without-rls false positive', () => {
+  it('a DO-block loop that dynamically enables RLS on all public tables → no table-without-rls', () => {
+    const sql = `
+      create table public.t1 (id uuid, user_id uuid);
+      create table public.t2 (id uuid, user_id uuid);
+      do $$ declare r record; begin
+        for r in select tablename from pg_tables where schemaname = 'public' loop
+          execute format('alter table %I enable row level security', r.tablename);
+        end loop; end $$;`;
+    expect(ruleIds(sql)).not.toContain('rls/table-without-rls');
+  });
+
+  it('regression: a genuinely unprotected table (no procedural enable) still fires', () => {
+    expect(ruleIds('create table public.t (id uuid, user_id uuid);')).toContain(
+      'rls/table-without-rls',
+    );
+  });
+
+  it("regression: a string literal mentioning 'enable row level security' is NOT a procedural enable — the rule still fires", () => {
+    const sql = `
+      create table public.t (id uuid, user_id uuid);
+      comment on table public.t is 'TODO: enable row level security';`;
+    expect(ruleIds(sql)).toContain('rls/table-without-rls');
+  });
+
+  it('a grant to anon on a procedurally-enabled table → no anon-table-grant (same suppression as table-without-rls)', () => {
+    const sql = `
+      create table public.t (id uuid, user_id uuid);
+      grant select, update on public.t to anon;
+      do $$ begin execute 'alter table public.t enable row level security'; end $$;`;
+    expect(ruleIds(sql)).not.toContain('rls/anon-table-grant');
+  });
+
+  it('a schema-wide grant to anon still fires under a procedural enable (wildcard is flagged regardless of RLS state, by design)', () => {
+    const sql = `
+      create table public.t (id uuid, user_id uuid);
+      grant select on all tables in schema public to anon;
+      do $$ begin execute 'alter table public.t enable row level security'; end $$;`;
+    expect(ruleIds(sql)).toContain('rls/anon-table-grant');
+  });
+});
+
+describe('scanSql — a policy scoped only to service_role/admin is trusted backend access, not a gap', () => {
+  const svc = (clause: string): string =>
+    `create table public.t (id uuid, user_id uuid);
+     alter table public.t enable row level security;
+     create policy p on public.t ${clause};`;
+  it('service_role permissive write (USING/WITH CHECK true) → silent', () => {
+    expect(ruleIds(svc('for all to service_role using (true) with check (true)'))).toEqual([]);
+  });
+  it('service_role authenticated-only on an owner table → no policy-not-owner-scoped', () => {
+    expect(ruleIds(svc('for select to service_role using (auth.uid() is not null)'))).toEqual([]);
+  });
+  it('service_role INSERT without WITH CHECK → no write-policy-without-check', () => {
+    expect(ruleIds(svc('for insert to service_role'))).toEqual([]);
+  });
+  it('regression: the SAME unconditional write to authenticated DOES fire', () => {
+    expect(ruleIds(svc('for all to authenticated using (true) with check (true)'))).toContain(
+      'rls/permissive-write-policy',
+    );
+  });
+
+  // The boundary `appliesOnlyToPrivilegedRoles` documents: a policy that ALSO names an unprivileged role
+  // stays fully in scope. If `.every()` ever regressed to `.some()`, all three rules would silently
+  // suppress real findings — these are the only tests that would catch it.
+  it('a MIXED role list (service_role, authenticated) stays in scope — permissive write fires', () => {
+    expect(
+      ruleIds(svc('for all to service_role, authenticated using (true) with check (true)')),
+    ).toContain('rls/permissive-write-policy');
+  });
+  it('mixed role list: INSERT without WITH CHECK fires write-policy-without-check', () => {
+    expect(ruleIds(svc('for insert to service_role, authenticated'))).toContain(
+      'rls/write-policy-without-check',
+    );
+  });
+  it('mixed role list: authenticated-only predicate on an owner table fires policy-not-owner-scoped', () => {
+    expect(
+      ruleIds(svc('for select to service_role, authenticated using (auth.uid() is not null)')),
+    ).toContain('rls/policy-not-owner-scoped');
+  });
+});
+
 describe('scanSql — disk fixtures', () => {
   it('exemplary good migration yields ZERO findings', () => {
     expect(scanSql({ files: sqlFilesIn(join(SQL_FIXTURES, 'good')) }).findings).toEqual([]);

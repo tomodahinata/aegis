@@ -232,13 +232,20 @@ const qIdent = (schema: string, name: string): string => `"?${schema}"?\\s*\\.\\
 const AUTH_UID = String.raw`${qIdent('auth', 'uid')}\s*\(\s*\)`;
 const AUTH_JWT = String.raw`${qIdent('auth', 'jwt')}\s*\(\s*\)`;
 const AUTH_ROLE = String.raw`${qIdent('auth', 'role')}\s*\(\s*\)`;
+// An auth call, bare or inside the Supabase-recommended `(select …)` performance wrapper — INCLUDING the
+// `AS <alias>` the Supabase CLI emits (`(select auth.uid() as uid)`). The alias is load-bearing and shared:
+// without it, every wrapper form of SESSION_PROOF / the role & claim gates silently fell through to
+// `unknown`, firing `rls/anon-writable` on authenticated-only and `service_role` policies and hiding the
+// owner-scope gap. One definition feeds AUTH_ID, SESSION_PROOF, ROLE_CALL and CLAIM_GATE so they cannot drift.
+const selectWrap = (call: string): string =>
+  String.raw`(?:${call}|\(\s*select\s+${call}\s*(?:as\s+[a-z_]\w*\s*)?\))`;
 // An optional Postgres cast on an operand (`::text`, `::uuid`, `::"text"`, `::public.citext`). `auth.uid()::text
 // = user_id::text` is owner-bound, not authenticated-only. The type run is length-bounded (`{0,64}`) as
 // REL-01 defense-in-depth against backtracking.
 const CAST = String.raw`(?:\s*::\s*"?[a-z_][\w.]{0,64}"?)?`;
-// An auth identity usable to bind a row to the caller: `auth.uid()`, the Supabase-recommended `(select
-// auth.uid())` performance wrapper (incl. the `as uid` alias its CLI emits), or the JWT subject claim.
-const AUTH_ID = String.raw`(?:${AUTH_UID}|\(\s*select\s+${AUTH_UID}\s*(?:as\s+[a-z_]\w*\s*)?\)|${AUTH_JWT}\s*->>?\s*'[^']*')`;
+// An auth identity usable to bind a row to the caller: `auth.uid()` (bare or in the `(select …)` wrapper),
+// or the JWT subject claim `auth.jwt() ->> 'sub'`.
+const AUTH_ID = String.raw`(?:${selectWrap(AUTH_UID)}|${AUTH_JWT}\s*->>?\s*'[^']*')`;
 // Owner-bound: an auth identity on one side of `=` and a (possibly qualified, possibly cast) column on the
 // other. The column side must contain at least one letter or underscore (`[A-Za-z_]`), so a bare
 // numeric/literal operand — `auth.uid() = 1` — is NOT mistaken for an ownership comparison (COR-02).
@@ -274,8 +281,6 @@ const OWNER_BOUND = new RegExp(
 );
 // A correlated subquery (`… in (select … from …)`, `exists (select … from …)`) — multi-tenant membership.
 const SUBQUERY = /\bselect\b[\s\S]*\bfrom\b/;
-// An auth call, optionally inside the Supabase `(select …)` performance wrapper.
-const selectWrap = (call: string): string => `(?:${call}|\\(\\s*select\\s+${call}\\s*\\))`;
 // The CLOSED set of predicates that ARE the authenticated-only gap: a positive proof that a session exists
 // while binding no row — `auth.uid()/auth.jwt() IS NOT NULL`, or `auth.role() = 'authenticated'`. Defining
 // the gap by these forms (rather than the old "mentions any auth.* token") is what holds precision at 1.0 on
@@ -319,6 +324,21 @@ const CLAIM_GATE = new RegExp(`${selectWrap(AUTH_JWT)}\\s*(?:->>?|#>>?|\\?[|&]?)
 // predicate that ORs in an app GUC — `is_public OR x = current_setting('app.tenant')` — is suppressed from
 // `rls/anon-writable`. Per Aegis doctrine that rare false negative is preferable to a false positive.
 const CONFIG_ROLE_GATE = /\b(?:current_user|session_user|current_role)\b|current_setting\s*\(/;
+// A single-quoted SQL literal in the UNROLLED-LOOP form (`'…'` with `''` escapes). This is linear — each
+// input char has exactly one path — unlike `'(?:[^']|'')*'`, whose ambiguity made `roleComparisonLiteral`
+// O(n²) under the global-`exec` loop (REL-01: a crafted `USING(…)` body could hang the scanner for tens of
+// seconds; the raw-length cap in `classifyPredicate` is the structural guard, this is defense in depth).
+const SQL_STRING = `'[^']*(?:''[^']*)*'`;
+// The caller's identity pinned to a SPECIFIC hardcoded value — `auth.uid() = '00000000-…'` (a single-admin
+// gate), `auth.jwt() ->> 'sub' = '<id>'`. An anon (null uid / no sub) can NEVER equal a concrete id, so this
+// authorizes exactly one user: neither the owner-scope gap NOR anon-satisfiable ⇒ `role-delegated`. The
+// literal is preserved by `maskForClassification` (via KEEP_PINNED_IDENTITY_LITERAL, built from the same
+// SQL_STRING fragment so the two cannot drift) — visible here as a string, not a column (owner-bound).
+// Field-validated: hardcoded-uuid admin gates were ~4% of `rls/anon-writable` findings — false positives
+// an anonymous visitor can never trigger.
+const SPECIFIC_CALLER = new RegExp(
+  `${AUTH_ID}${CAST}\\s*=\\s*${SQL_STRING}${CAST}|${SQL_STRING}${CAST}\\s*=\\s*${AUTH_ID}${CAST}`,
+);
 
 /**
  * SQL builtins/keywords that look like a function call (`name(`) but are NOT a custom authorization
@@ -397,6 +417,25 @@ function callsCustomFunction(normalized: string): boolean {
   return false;
 }
 
+// The kept-literal patterns for `maskForClassification`, compiled ONCE (they were rebuilt on every call —
+// a per-predicate cost that scaled with corpus RLS density). `gi`, NOT `g`: masking runs BEFORE
+// `classifyPredicate` lowercases, so the `i` flag is load-bearing — with `g` alone an uppercase
+// `AUTH.ROLE() = 'service_role'` loses its kept literal and regresses to `unknown` (an anon-writable FP).
+// The right-hand literal of every JWT/claim accessor — `auth.jwt() ->> 'sub' = user_id` must stay owner-bound.
+const KEEP_JWT_ACCESSOR_LITERAL = new RegExp(`${AUTH_JWT}\\s*->>?\\s*${SQL_STRING}`, 'gi');
+// The literal in an `auth.role() = '…'` comparison (incl. the `(select auth.role())` performance wrapper),
+// so SESSION_PROOF can match the gap (`= 'authenticated'`) and not a role restriction (`= 'service_role'`).
+const KEEP_ROLE_COMPARISON_LITERAL = new RegExp(
+  `${ROLE_CALL}\\s*=\\s*${SQL_STRING}|${SQL_STRING}\\s*=\\s*${ROLE_CALL}`,
+  'gi',
+);
+// The literal an auth IDENTITY is pinned to — `auth.uid() = '<uuid>'`, `auth.jwt() ->> 'sub' = '<id>'` —
+// so SPECIFIC_CALLER sees a concrete caller id (an anon can never equal it), not a column (owner-bound).
+const KEEP_PINNED_IDENTITY_LITERAL = new RegExp(
+  `${AUTH_ID}${CAST}\\s*=\\s*${SQL_STRING}|${SQL_STRING}${CAST}\\s*=\\s*${AUTH_ID}`,
+  'gi',
+);
+
 /**
  * Build the string the classification regexes run against: a same-length copy of `expr` with every
  * non-code character blanked, so an `auth.*` token that lives inside a comment or a string literal is
@@ -405,12 +444,14 @@ function callsCustomFunction(normalized: string): boolean {
  * the worst outcome for a zero-FP scanner.
  *
  * Line/block comments and dollar-quoted bodies are blanked unconditionally (`maskNonCode`). Single-quoted
- * string literals are blanked too, with TWO exceptions that are load-bearing for classification, each a
+ * string literals are blanked too, with THREE exceptions that are load-bearing for classification, each a
  * literal adjacent to real auth code: (1) the right-hand operand of a JWT/claim accessor (`auth.jwt() ->>
- * '…'`, `auth.jwt() -> '…'`), so `auth.jwt() ->> 'sub' = user_id` stays owner-bound; and (2) the literal in
+ * '…'`, `auth.jwt() -> '…'`), so `auth.jwt() ->> 'sub' = user_id` stays owner-bound; (2) the literal in
  * an `auth.role() = '…'` comparison, so the gap (`'authenticated'`) is distinguishable from a role
- * restriction (`'service_role'`). Every OTHER single-quoted literal is content we never key on — blanking
- * it cannot change a class except to remove a false `auth.*` match — so this masking stays safe.
+ * restriction (`'service_role'`); and (3) the literal an auth identity is pinned to (`auth.uid() =
+ * '<uuid>'`), so `SPECIFIC_CALLER` can classify the single-admin gate. Every OTHER single-quoted literal
+ * is content we never key on — blanking it cannot change a class except to remove a false `auth.*`
+ * match — so this masking stays safe.
  *
  * `current_setting('…')` and similar builtins are classified by their *name* (in `SAFE_BUILTINS`), never
  * by the literal argument, so blanking those literals is likewise inert.
@@ -423,14 +464,10 @@ function maskForClassification(expr: string): string {
   const firstPass = maskNonCodeKeepingStrings(expr);
   const out = firstPass.split('');
   const keep = new Set<number>();
-  // A single-quoted SQL literal in the UNROLLED-LOOP form (`'…'` with `''` escapes). This is linear — each
-  // input char has exactly one path — unlike `'(?:[^']|'')*'`, whose ambiguity made `roleComparisonLiteral`
-  // O(n²) under the global-`exec` loop (REL-01: a crafted `USING(…)` body could hang the scanner for tens of
-  // seconds; the raw-length cap in `classifyPredicate` is the structural guard, this is defense in depth).
-  const SQL_STRING = `'[^']*(?:''[^']*)*'`;
   // Mark every char of a match as KEEP, so it survives string-blanking. (A `"` inside such a kept literal is
   // neutralized later, in `classifyPredicate`'s identifier-quote strip, so it cannot forge a keyword.)
   const markKept = (re: RegExp): void => {
+    re.lastIndex = 0; // shared module-level /g regex — the exec-to-null loop resets it, this is a belt
     let m: RegExpExecArray | null;
     // biome-ignore lint/suspicious/noAssignInExpressions: idiomatic global-regex iteration
     while ((m = re.exec(firstPass)) !== null) {
@@ -439,13 +476,9 @@ function maskForClassification(expr: string): string {
       }
     }
   };
-  // The right-hand literal of every JWT/claim accessor — `auth.jwt() ->> 'sub' = user_id` must stay owner-bound.
-  markKept(new RegExp(`${AUTH_JWT}\\s*->>?\\s*${SQL_STRING}`, 'gi'));
-  // The literal in an `auth.role() = '…'` comparison (incl. the `(select auth.role())` performance wrapper),
-  // so SESSION_PROOF can match the gap (`= 'authenticated'`) and not a role restriction (`= 'service_role'`).
-  markKept(
-    new RegExp(`${ROLE_CALL}\\s*=\\s*${SQL_STRING}|${SQL_STRING}\\s*=\\s*${ROLE_CALL}`, 'gi'),
-  );
+  markKept(KEEP_JWT_ACCESSOR_LITERAL);
+  markKept(KEEP_ROLE_COMPARISON_LITERAL);
+  markKept(KEEP_PINNED_IDENTITY_LITERAL);
   let state: 'normal' | 'single-quote' = 'normal';
   let i = 0;
   while (i < firstPass.length) {
@@ -571,7 +604,8 @@ export function classifyPredicate(expr: string | undefined): PredicateClass {
   if (
     ROLE_RESTRICTED.test(normalized) ||
     CLAIM_GATE.test(normalized) ||
-    CONFIG_ROLE_GATE.test(normalized)
+    CONFIG_ROLE_GATE.test(normalized) ||
+    SPECIFIC_CALLER.test(normalized)
   ) {
     return 'role-delegated';
   }

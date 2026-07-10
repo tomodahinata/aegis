@@ -137,6 +137,52 @@ describe('diffAccess — invariants (fast-check)', () => {
 });
 
 describe('diffAccess — behavioral details', () => {
+  it('table-added-without-rls is suppressed when the head declares a procedural bulk-enable', () => {
+    // A DO-block loop sets proceduralRlsEnable=true on the model but leaves per-table rlsEnabled=false —
+    // a new table in such a schema is not a PROVABLE widening (same suppression as rls/table-without-rls).
+    const base = model('');
+    const head = model(
+      `create table public.events (id uuid primary key, user_id uuid);
+       do $$ declare r record; begin
+         for r in select tablename from pg_tables where schemaname = 'public' loop
+           execute format('alter table %I enable row level security', r.tablename);
+         end loop; end $$;`,
+    );
+    expect(head.tables.get('events')?.rlsEnabled).toBe(false); // the FP-exposing model state
+    expect(head.proceduralRlsEnable).toBe(true);
+    const added = diffAccess(base, head).filter((d) => d.change.type === 'table-added-without-rls');
+    expect(added).toEqual([]);
+  });
+
+  it('regression: a new table WITHOUT any enable still emits table-added-without-rls', () => {
+    const base = model('');
+    const head = model('create table public.events (id uuid primary key, user_id uuid);');
+    expect(diffAccess(base, head).map((d) => d.change.type)).toContain('table-added-without-rls');
+  });
+
+  it('grant-added under a head procedural enable stays at notice, without the direct-exposure claim', () => {
+    const base = model('create table public.t (id uuid);');
+    const head = model(
+      `create table public.t (id uuid);
+       grant select on public.t to anon;
+       do $$ begin execute format('alter table %I enable row level security', 't'); end $$;`,
+    );
+    const grant = diffAccess(base, head).find((d) => d.change.type === 'grant-added');
+    expect(grant?.severity).toBe('notice');
+    expect(grant?.summary).not.toContain('NO RLS');
+  });
+
+  it('regression: grant-added on a genuinely unprotected table still escalates to high', () => {
+    const base = model('create table public.t (id uuid);');
+    const head = model(
+      `create table public.t (id uuid);
+       grant select on public.t to anon;`,
+    );
+    const grant = diffAccess(base, head).find((d) => d.change.type === 'grant-added');
+    expect(grant?.severity).toBe('high');
+    expect(grant?.summary).toContain('NO RLS');
+  });
+
   it('carries per-(role, command) transitions as evidence on policy deltas', () => {
     const base = model(
       `create table public.docs (id uuid, user_id uuid);

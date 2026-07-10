@@ -115,7 +115,11 @@ export function diffAccess(base: RlsModel, head: RlsModel, options?: DiffOptions
   for (const [name, headTable] of head.tables) {
     const baseTable = base.tables.get(name);
     if (!baseTable) {
-      if (!headTable.rlsEnabled) {
+      // A head-side procedural enable (DO-block / dynamic EXECUTE loop) cannot be attributed to a named
+      // table, so `rlsEnabled` stays false on every table it covers. Same suppression as the scanner's
+      // `rls/table-without-rls`: the new table is then not a PROVABLE widening, and flagging it would
+      // resurrect the CI-breaking false positive that flag exists to prevent.
+      if (!headTable.rlsEnabled && !head.proceduralRlsEnable) {
         push(
           {
             kind: 'widening',
@@ -132,6 +136,10 @@ export function diffAccess(base: RlsModel, head: RlsModel, options?: DiffOptions
       }
       continue;
     }
+    // KNOWN FP, deliberately ungated: a base static enable refactored into a head procedural DO-loop
+    // reads as rls-disabled here. Gating on head.proceduralRlsEnable would fail OPEN on a REAL disable in
+    // any repo that also carries a procedural enable — and this branch is the diff's most safety-critical
+    // detection. Closing it needs per-table attribution of the dynamic enable, not a blanket gate.
     if (baseTable.rlsEnabled && !headTable.rlsEnabled) {
       push(
         {
@@ -299,11 +307,15 @@ export function diffAccess(base: RlsModel, head: RlsModel, options?: DiffOptions
     if (added.length > 0) {
       const anonAdded = added.filter(isAnonLike);
       // A schema-wide grant exposes EVERY modeled table, so it is high-severity when ANY of them lacks
-      // RLS — the broadest exposure ('*') must never rank below its single-table form.
+      // RLS — the broadest exposure ('*') must never rank below its single-table form. Under a head-side
+      // procedural enable, `rlsEnabled === false` is not provable "NO RLS" (same suppression as
+      // `table-added-without-rls` above): the widening still emits, but at 'notice' and without the
+      // direct-exposure claim.
       const rlsOff =
-        table === '*'
+        !head.proceduralRlsEnable &&
+        (table === '*'
           ? [...head.tables.values()].some((t) => t.rlsEnabled === false)
-          : head.tables.get(table)?.rlsEnabled === false;
+          : head.tables.get(table)?.rlsEnabled === false);
       const exposure =
         rlsOff && anonAdded.length > 0
           ? table === '*'

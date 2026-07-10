@@ -120,6 +120,16 @@ export interface RlsModel {
   readonly securityDefinerFunctions: readonly FunctionInfo[];
   /** Access-relevant statements the model could not interpret — consumers must treat these fail-closed. */
   readonly uninterpreted: readonly UninterpretedStatement[];
+  /**
+   * The schema enables RLS through a construct this static model cannot attribute to a named table — a DO
+   * block, a function body, or a dynamic `EXECUTE format('alter table %I enable row level security', …)`
+   * loop over `pg_tables`. When true, no public table can be proven RLS-off, so every consumer that would
+   * otherwise claim a provable gap — `rls/table-without-rls` (CI-blocking), `rls/anon-table-grant`
+   * (non-wildcard), the RLS↔code correlator's no-RLS reason, and policy-diff's `table-added-without-rls`
+   * and grant-exposure escalation — suppresses rather than cry wolf. Fail-secure toward the
+   * zero-false-positive wedge.
+   */
+  readonly proceduralRlsEnable: boolean;
 }
 
 export interface SqlSource {
@@ -200,16 +210,31 @@ function isPolicySchema(schema: string): schema is PolicySchema {
 const CREATE_TABLE =
   /^create\s+(?:unlogged\s+|global\s+|local\s+|temp\s+|temporary\s+)?table\s+(?:if\s+not\s+exists\s+)?([\w".]+)/i;
 const DROP_TABLE = /^drop\s+table\s+(?:if\s+exists\s+)?([\w".]+)/i;
-const ENABLE_RLS =
-  /^alter\s+table\s+(?:only\s+)?([\w".]+)\s+(?:enable|force)\s+row\s+level\s+security/i;
+// The shared lead-in of every ALTER TABLE form the model parses: `ALTER TABLE [IF EXISTS] [ONLY] <name>`
+// (group 1 = table name). PostgreSQL accepts both modifiers, in that order; capturing them ONCE here —
+// the fragment style `predicate.ts` already uses — means a new ALTER TABLE rule can never silently omit
+// one. Omitting `IF EXISTS` was a real defect: `ALTER TABLE IF EXISTS t ENABLE RLS` misread as "no RLS"
+// (a CI-breaking false positive), `… DISABLE …` was missed (fail OPEN, hiding a real exposure), and
+// `… ADD COLUMN user_id` dropped the ownership column (silencing the owner-scope rule) — all while
+// CREATE/DROP TABLE above already handled their existence clause.
+const ALTER_TABLE_HEAD = String.raw`alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?([\w".]+)`;
+const ENABLE_RLS = new RegExp(
+  String.raw`^${ALTER_TABLE_HEAD}\s+(?:enable|force)\s+row\s+level\s+security`,
+  'i',
+);
 // The DISABLE counterpart. Unparsed, a `DISABLE ROW LEVEL SECURITY` leaves the model claiming RLS is
 // on — the exact fail-open a policy DIFF must not have (base "enabled" vs head "disabled" would read
 // as no change). `NO FORCE` is deliberately NOT here: it only stops applying RLS to the table OWNER;
 // regular roles stay policy-scoped, so treating it as a disable would fabricate a widening. It falls
 // through to the `rls-statement` uninterpreted net instead (fail closed, never fail wrong).
-const DISABLE_RLS = /^alter\s+table\s+(?:only\s+)?([\w".]+)\s+disable\s+row\s+level\s+security/i;
-const ALTER_ADD_COLUMN =
-  /^alter\s+table\s+(?:only\s+)?([\w".]+)\s+add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?([\w"]+)/i;
+const DISABLE_RLS = new RegExp(
+  String.raw`^${ALTER_TABLE_HEAD}\s+disable\s+row\s+level\s+security`,
+  'i',
+);
+const ALTER_ADD_COLUMN = new RegExp(
+  String.raw`^${ALTER_TABLE_HEAD}\s+add\s+(?:column\s+)?(?:if\s+not\s+exists\s+)?([\w"]+)`,
+  'i',
+);
 // Policy statements capture the NAME (group 1) and the table (group 2) so the model can key policies by
 // identity and apply CREATE/DROP/ALTER in migration order (final-state semantics).
 const CREATE_POLICY = /^create\s+policy\s+("[^"]+"|[\w-]+)\s+on\s+([\w".]+)/i;
@@ -230,6 +255,122 @@ const REVOKE_ALL = /^revoke\s+(?:grant\s+option\s+for\s+)?all(?:\s+privileges)?\
 // Statement families the uninterpreted nets key on (see UninterpretedStatement).
 const MENTIONS_RLS = /\brow\s+level\s+security\b/i;
 const MENTIONS_POLICY = /^(?:create|alter|drop)\s+policy\b/i;
+// Any mention of turning RLS on. Cheap pre-filter ONLY — the actual procedural evidence test is
+// PROCEDURAL_RLS_ENABLE below; this one exists so the ~all statements that never mention RLS skip
+// the comment strip entirely.
+const RLS_ENABLE = /\benable\s+row\s+level\s+security/i;
+// EXECUTABLE procedural-enable evidence: the full `alter table … enable row level security` phrase
+// embedded in the statement — a dynamic `execute format('alter table %I enable row level security', …)`
+// loop, an `execute '…'` string, or an `'ALTER TABLE ' || quote_ident(t) || ' ENABLE …'` concatenation.
+// Requiring the ALTER TABLE phrase (not any RLS mention) is load-bearing: a bare-phrase match let ANY
+// string literal — `comment on table t is 'TODO: enable row level security'`, seed data, a column
+// default — silently switch off the CI-blocking `rls/table-without-rls` for the whole scan (fail OPEN).
+// The gap between the two phrases is length-bounded as backtracking defense-in-depth.
+const PROCEDURAL_RLS_ENABLE = /\balter\s+table\b[\s\S]{0,256}?\benable\s+row\s+level\s+security/i;
+// The construct kinds that can actually EXECUTE dynamic DDL: a DO block, a function/procedure body, an
+// `EXECUTE`, a `format()`/`concat()` builder, or a `||` concatenation (covers the psql `\gexec` idioms,
+// which start with SELECT). Requiring this ALONGSIDE the phrase above keeps a plain DML/DDL statement
+// that merely CARRIES the phrase in a literal — `alter table … set default '… enable row level
+// security'`, an INSERT with the phrase split across values — from suppressing the CI rule scan-wide.
+const PROCEDURAL_CONTEXT =
+  /^do\b|^create\s+(?:or\s+replace\s+)?(?:function|procedure)\b|\bexecute\b|\b(?:format|concat)\s*\(|\|\|/i;
+// STRING-AWARE comment strip: blanks `--` line comments and (non-nesting) `/* … */` block comments while
+// preserving single-quoted literals. String-awareness is load-bearing, not polish — a naive regex strip
+// can SPLICE a comment across a string boundary (`-- x /*` on one line, `'*/ … enable row level
+// security'` in a literal below) and expose literal text as code, letting crafted SQL fabricate a static
+// `ENABLE` that fails OPEN. Dollar-quoted bodies are deliberately treated as code so a procedural enable
+// inside a DO block / function body stays visible to `PROCEDURAL_RLS_ENABLE` while an in-body `-- note`
+// is still stripped. Nested block comments stay unhandled (the leftover `*/` makes the ALTER regexes fail
+// and the statement lands in the uninterpreted net — detection-only, never wrong attribution).
+function stripSqlComments(text: string): string {
+  let out = '';
+  let state: 'code' | 'string' | 'line-comment' | 'block-comment' = 'code';
+  let i = 0;
+  while (i < text.length) {
+    const ch = text.charAt(i);
+    const pair = ch + (text.charAt(i + 1) ?? '');
+    if (state === 'code') {
+      if (pair === '--') {
+        state = 'line-comment';
+        out += '  ';
+        i += 2;
+      } else if (pair === '/*') {
+        state = 'block-comment';
+        out += '  ';
+        i += 2;
+      } else {
+        if (ch === "'") {
+          state = 'string';
+        }
+        out += ch;
+        i += 1;
+      }
+    } else if (state === 'string') {
+      if (pair === "''") {
+        out += "''";
+        i += 2; // escaped quote stays inside the string
+      } else {
+        if (ch === "'") {
+          state = 'code';
+        }
+        out += ch;
+        i += 1;
+      }
+    } else if (state === 'line-comment') {
+      out += ch === '\n' ? '\n' : ' ';
+      if (ch === '\n') {
+        state = 'code';
+      }
+      i += 1;
+    } else {
+      if (pair === '*/') {
+        state = 'code';
+        out += '  ';
+        i += 2;
+      } else {
+        out += ch === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+    }
+  }
+  return out;
+}
+/**
+ * Whether a statement enables RLS PROCEDURALLY — it is an executable dynamic construct
+ * (`PROCEDURAL_CONTEXT`) carrying the full `alter table … enable` phrase (`PROCEDURAL_RLS_ENABLE`), yet
+ * is not a static `ALTER TABLE … ENABLE`. Comments are stripped first, so a `-- enable row level
+ * security` note never triggers it, and the static test runs on the STRIPPED text so a comment-interleaved
+ * static enable is attributed to its named table (via the `execCommentTolerant` handler fallback in
+ * `buildRlsModel`), never misfiled as procedural. Accepted residual: a string literal that carries the
+ * full phrase AND sits in a procedural-looking statement (`execute '…'`, a `format()`/`||` builder) still
+ * counts — that errs toward suppression only on text that plausibly executes, and such statements also
+ * land in the `rls-statement` uninterpreted net (fail closed for the diff engine).
+ */
+function enablesRlsProcedurally(text: string): boolean {
+  if (!RLS_ENABLE.test(text)) {
+    return false;
+  }
+  const stripped = stripSqlComments(text);
+  if (ENABLE_RLS.test(stripped)) {
+    return false; // static enable (possibly comment-interleaved) — attributed per-table, not procedural
+  }
+  return PROCEDURAL_CONTEXT.test(stripped) && PROCEDURAL_RLS_ENABLE.test(stripped);
+}
+
+// Fallback for the ALTER TABLE handlers (ENABLE/DISABLE RLS, ADD COLUMN): an inline comment between
+// tokens (`alter table t -- audit` newline `enable row level security`) defeats the raw regex, which
+// would misfile an attributable ENABLE as procedural, silently DROP a DISABLE (fail open — the model
+// would keep claiming RLS is on), or lose an ownership column. Retrying on comment-stripped text is safe
+// for exactly these forms: the matched span is fixed keywords plus `[\w".]+`/`[\w"]+` identifiers, and
+// none admits `--` or `/*` (a quoted identifier containing them already fails the raw charset today and
+// stays in the uninterpreted net).
+function execCommentTolerant(re: RegExp, text: string): RegExpExecArray | null {
+  const raw = re.exec(text);
+  if (raw) {
+    return raw;
+  }
+  return text.includes('--') || text.includes('/*') ? re.exec(stripSqlComments(text)) : null;
+}
 
 function policyCommand(text: string): PolicyCommand {
   const m = /\bfor\s+(all|select|insert|update|delete)\b/i.exec(text);
@@ -368,11 +509,21 @@ export function buildRlsModel(sources: readonly SqlSource[]): RlsModel {
   const functions = new Map<string, FunctionRecord>();
   const grants: MutableGrant[] = [];
   const uninterpreted: UninterpretedStatement[] = [];
+  let proceduralRlsEnable = false;
 
   for (const source of sources) {
     for (const stmt of splitStatements(source.text)) {
       const loc: SqlLocation = { file: source.path, line: stmt.line, column: stmt.column };
       const text = stmt.text;
+
+      // A DO block / function / dynamic EXECUTE that enables RLS is invisible to per-table tracking; note it
+      // so `rls/table-without-rls` fails secure instead of flagging tables it cannot prove are unprotected.
+      // Computed per statement (not latched) because the CREATE FUNCTION handler consumes its statement
+      // BEFORE the uninterpreted nets and must still leave the fail-closed `rls-statement` breadcrumb.
+      const proceduralEnable = enablesRlsProcedurally(text);
+      if (proceduralEnable) {
+        proceduralRlsEnable = true;
+      }
 
       const createTable = CREATE_TABLE.exec(text);
       if (createTable?.[1]) {
@@ -403,7 +554,7 @@ export function buildRlsModel(sources: readonly SqlSource[]): RlsModel {
         }
         continue;
       }
-      const enableRls = ENABLE_RLS.exec(text);
+      const enableRls = execCommentTolerant(ENABLE_RLS, text);
       if (enableRls?.[1]) {
         const { schema, name } = parseQualified(enableRls[1]);
         if (schema === 'public') {
@@ -414,7 +565,7 @@ export function buildRlsModel(sources: readonly SqlSource[]): RlsModel {
         }
         continue;
       }
-      const disableRls = DISABLE_RLS.exec(text);
+      const disableRls = execCommentTolerant(DISABLE_RLS, text);
       if (disableRls?.[1]) {
         const { schema, name } = parseQualified(disableRls[1]);
         if (schema === 'public') {
@@ -425,7 +576,7 @@ export function buildRlsModel(sources: readonly SqlSource[]): RlsModel {
         }
         continue;
       }
-      const addColumn = ALTER_ADD_COLUMN.exec(text);
+      const addColumn = execCommentTolerant(ALTER_ADD_COLUMN, text);
       if (addColumn?.[1] && addColumn[2]) {
         const { schema, name } = parseQualified(addColumn[1]);
         const column = addColumn[2].replace(/"/g, '').toLowerCase();
@@ -525,6 +676,12 @@ export function buildRlsModel(sources: readonly SqlSource[]): RlsModel {
           searchPathPinned: /\bset\s+"?search_path"?/i.test(prelude),
           loc,
         });
+        // A function body that enables RLS procedurally would otherwise be the ONE procedural container
+        // consumed before the uninterpreted nets (DO/SELECT/EXECUTE all fall through) — leave the
+        // fail-closed breadcrumb the diff engine relies on.
+        if (proceduralEnable) {
+          uninterpreted.push({ kind: 'rls-statement', loc });
+        }
         continue;
       }
       const dropFn = DROP_FUNCTION.exec(text);
@@ -594,5 +751,6 @@ export function buildRlsModel(sources: readonly SqlSource[]): RlsModel {
     grants: grants.filter((grant) => grant.roles.length > 0),
     securityDefinerFunctions,
     uninterpreted,
+    proceduralRlsEnable,
   };
 }

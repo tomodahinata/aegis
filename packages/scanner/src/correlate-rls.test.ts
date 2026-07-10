@@ -62,6 +62,44 @@ describe('correlateRls', () => {
     ).toEqual([]);
   });
 
+  // Parity with the rls/* rules' precision gates — the correlator re-derives the same verdicts, so it
+  // must apply the same suppressions or it resurrects, at HIGH confidence with "confirmed exposure"
+  // phrasing, the exact false positives the rules learned to skip.
+  describe('suppression parity with the rls/* rules', () => {
+    it('does not flag a table whose RLS is enabled procedurally (DO-block / dynamic EXECUTE)', () => {
+      expect(
+        run(
+          `create table public.orders (id uuid);
+           do $$ begin execute 'alter table public.orders enable row level security'; end $$;`,
+          "export const all = () => supabase.from('orders').select('*');",
+        ),
+      ).toEqual([]);
+    });
+
+    it('does not flag an unconditional write policy scoped only to service_role (unreachable by the querying client)', () => {
+      expect(
+        run(
+          `create table public.jobs (id uuid primary key, user_id uuid not null);
+           alter table public.jobs enable row level security;
+           create policy jobs_owner on public.jobs for select using (auth.uid() = user_id);
+           create policy jobs_svc on public.jobs for all to service_role using (true) with check (true);`,
+          "export const all = () => supabase.from('jobs').select('*');",
+        ),
+      ).toEqual([]);
+    });
+
+    it('does not flag an authenticated-only policy scoped only to service_role', () => {
+      expect(
+        run(
+          `create table public.docs (id uuid primary key, user_id uuid not null);
+           alter table public.docs enable row level security;
+           create policy docs_svc on public.docs for select to service_role using (auth.role() = 'authenticated');`,
+          "export const all = () => supabase.from('docs').select('*');",
+        ),
+      ).toEqual([]);
+    });
+  });
+
   describe('authenticated-only policy (RLS exists but does not scope to the caller)', () => {
     const ownedAuthOnly = `create table public.docs (id uuid primary key, user_id uuid not null);
        alter table public.docs enable row level security;

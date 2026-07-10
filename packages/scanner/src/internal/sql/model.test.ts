@@ -43,6 +43,236 @@ describe('buildRlsModel — RLS enable/disable final-state semantics', () => {
   });
 });
 
+// `ALTER TABLE IF EXISTS …` is a common defensive migration idiom. It must be parsed identically to the
+// bare form for every ALTER TABLE handler — historically only the CREATE/DROP paths honored the existence
+// clause, so `IF EXISTS` on ENABLE produced a CI-breaking false `table-without-rls`, on DISABLE was missed
+// (fail OPEN), and on ADD COLUMN dropped the ownership column (silencing the owner-scope rule).
+describe('buildRlsModel — ALTER TABLE IF EXISTS modifier (regression)', () => {
+  it('ENABLE via ALTER TABLE IF EXISTS turns rlsEnabled ON (was a false table-without-rls)', () => {
+    const m = model(`
+      create table public.docs (id uuid, user_id uuid);
+      alter table if exists public.docs enable row level security;
+    `);
+    expect(m.tables.get('docs')?.rlsEnabled).toBe(true);
+  });
+
+  it('DISABLE via ALTER TABLE IF EXISTS turns rlsEnabled OFF (was fail-open — a missed disable)', () => {
+    const m = model(`
+      create table public.docs (id uuid, user_id uuid);
+      alter table public.docs enable row level security;
+      alter table if exists public.docs disable row level security;
+    `);
+    expect(m.tables.get('docs')?.rlsEnabled).toBe(false);
+  });
+
+  it('honors IF EXISTS and ONLY together, in PostgreSQL order (ALTER TABLE IF EXISTS ONLY t …)', () => {
+    const m = model(`
+      create table public.docs (id uuid);
+      alter table if exists only public.docs enable row level security;
+    `);
+    expect(m.tables.get('docs')?.rlsEnabled).toBe(true);
+  });
+
+  it('ADD COLUMN via ALTER TABLE IF EXISTS records the ownership column (was a fail-open miss)', () => {
+    const m = model(`
+      create table public.docs (id uuid);
+      alter table if exists public.docs add column user_id uuid;
+    `);
+    expect(m.tables.get('docs')?.hasOwnershipColumn).toBe(true);
+    expect(m.tables.get('docs')?.ownershipColumn).toBe('user_id');
+  });
+
+  it('NO FORCE with IF EXISTS is still not a disable — recorded uninterpreted, RLS stays on', () => {
+    const m = model(`
+      create table public.docs (id uuid);
+      alter table if exists public.docs enable row level security;
+      alter table if exists public.docs no force row level security;
+    `);
+    expect(m.tables.get('docs')?.rlsEnabled).toBe(true);
+    expect(m.uninterpreted).toEqual([expect.objectContaining({ kind: 'rls-statement' })]);
+  });
+});
+
+// Procedural / dynamic `ENABLE ROW LEVEL SECURITY` (a DO block, a function body, or a dynamic EXECUTE loop
+// over pg_tables) is invisible to per-table tracking. The model flags it so `rls/table-without-rls` can fail
+// secure instead of flagging tables whose RLS was enabled through a construct it cannot statically attribute.
+describe('buildRlsModel — procedural RLS enablement detection', () => {
+  it('flags a DO-block loop that dynamically enables RLS on all public tables', () => {
+    const m = model(`
+      create table public.t1 (id uuid);
+      create table public.t2 (id uuid);
+      do $$ declare r record; begin
+        for r in select tablename from pg_tables where schemaname = 'public' loop
+          execute format('alter table %I enable row level security', r.tablename);
+        end loop; end $$;
+    `);
+    expect(m.proceduralRlsEnable).toBe(true);
+  });
+
+  it('flags a dynamic EXECUTE string that enables RLS', () => {
+    const m = model(`
+      create table public.t (id uuid);
+      do $$ begin execute 'alter table public.t enable row level security'; end $$;
+    `);
+    expect(m.proceduralRlsEnable).toBe(true);
+  });
+
+  it('does NOT flag a schema that only enables RLS via static top-level ALTER statements', () => {
+    const m = model(`
+      create table public.t (id uuid);
+      alter table public.t enable row level security;
+    `);
+    expect(m.proceduralRlsEnable).toBe(false);
+  });
+
+  it('does NOT flag an IN-statement comment mentioning the enable (exercises the comment strip — an inter-statement comment never even reaches the model)', () => {
+    const m = model(`
+      do $$ begin -- enable row level security for all tables (someday)
+        perform pg_notify('migrations', 'done');
+      end $$;
+      create table public.t (id uuid);
+    `);
+    expect(m.proceduralRlsEnable).toBe(false);
+    expect(m.tables.get('t')?.rlsEnabled).toBe(false);
+  });
+
+  it('does NOT flag a string literal that merely MENTIONS enabling RLS (COMMENT ON / seed data — was fail-open: one such literal silenced table-without-rls scan-wide)', () => {
+    const m = model(`
+      create table public.t (id uuid);
+      comment on table public.t is 'TODO: enable row level security before launch';
+      insert into public.notes (body) values ('remember to enable row level security');
+    `);
+    expect(m.proceduralRlsEnable).toBe(false);
+    expect(m.tables.get('t')?.rlsEnabled).toBe(false);
+  });
+
+  it('does NOT flag a column default containing the phrase (the CREATE TABLE statement itself must not poison the flag)', () => {
+    const m = model(`
+      create table public.audit (id uuid, note text default 'enable row level security later');
+    `);
+    expect(m.proceduralRlsEnable).toBe(false);
+    expect(m.tables.get('audit')?.rlsEnabled).toBe(false);
+  });
+
+  it('does NOT flag a plain seed literal carrying the full phrase — no procedural context, no suppression', () => {
+    const m = model(`
+      create table public.snippets (id uuid);
+      insert into public.snippets (body) values ('alter table public.x enable row level security');
+    `);
+    expect(m.proceduralRlsEnable).toBe(false);
+  });
+
+  it('does NOT flag an unrelated ALTER TABLE whose literal mentions the phrase (real ALTER code + innocent default)', () => {
+    const m = model(`
+      create table public.audit (id uuid, note text);
+      alter table public.audit alter column note set default 'remember to enable row level security';
+    `);
+    expect(m.proceduralRlsEnable).toBe(false);
+    expect(m.tables.get('audit')?.rlsEnabled).toBe(false);
+  });
+
+  it('does NOT flag the phrase split across two literals in one DML statement', () => {
+    const m = model(`
+      create table public.audit_log (id uuid);
+      insert into public.audit_log (action, detail) values ('ran alter table cmd', 'enable row level security');
+    `);
+    expect(m.proceduralRlsEnable).toBe(false);
+  });
+
+  it('flags a bare plpgsql FUNCTION body enable (no EXECUTE keyword — caught by the create-function context)', () => {
+    const m = model(`
+      create table public.t (id uuid);
+      create or replace function public.harden() returns void language plpgsql as $$
+        begin alter table public.t enable row level security; end $$;
+    `);
+    expect(m.proceduralRlsEnable).toBe(true);
+  });
+
+  it('flags the psql \\gexec idiom (SELECT format(…) — no do/create prefix, caught by the format( context)', () => {
+    const m = model(`
+      create table public.t (id uuid);
+      select format('alter table %I enable row level security', tablename) from pg_tables where schemaname = 'public' \\gexec
+    `);
+    expect(m.proceduralRlsEnable).toBe(true);
+  });
+
+  it('a block-comment-interleaved ENABLE is attributed to its table, never misfiled as procedural', () => {
+    const m = model(`
+      create table public.a (id uuid);
+      create table public.b (id uuid);
+      alter table public.a /* migration step 1 */ enable row level security;
+    `);
+    expect(m.tables.get('a')?.rlsEnabled).toBe(true);
+    expect(m.tables.get('b')?.rlsEnabled).toBe(false);
+    expect(m.proceduralRlsEnable).toBe(false);
+  });
+
+  it('a comment whose body is itself comment-like (/* -- */) does not corrupt the strip (approximation edge)', () => {
+    const m = model(`
+      create table public.a (id uuid);
+      alter table public.a /* -- */ enable row level security;
+    `);
+    expect(m.tables.get('a')?.rlsEnabled).toBe(true);
+    expect(m.proceduralRlsEnable).toBe(false);
+  });
+
+  it('a comment-interleaved ADD COLUMN still records the ownership column (same fallback as ENABLE/DISABLE)', () => {
+    const m = model(`
+      create table public.docs (id uuid);
+      alter table public.docs /* fk to auth.users */ add column user_id uuid;
+    `);
+    expect(m.tables.get('docs')?.hasOwnershipColumn).toBe(true);
+    expect(m.tables.get('docs')?.ownershipColumn).toBe('user_id');
+  });
+
+  it('a comment/string SPLICE cannot fabricate a static ENABLE (string-aware strip — stays fail-closed)', () => {
+    // Adversarial shape: `-- x /*` opens nothing (it is a line comment) and `'*/ … enable row level
+    // security'` is a literal. A string-naive strip would splice them and expose the literal tail as
+    // code, fabricating rlsEnabled=true for a statement that never touches RLS.
+    const m = model(`
+      create table public.users (id uuid);
+      alter table public.users -- x /*
+        alter column note set default '*/
+        enable row level security';
+    `);
+    expect(m.tables.get('users')?.rlsEnabled).toBe(false);
+    expect(m.proceduralRlsEnable).toBe(false);
+    expect(m.uninterpreted).toEqual([expect.objectContaining({ kind: 'rls-statement' })]);
+  });
+
+  it('a procedural enable inside CREATE FUNCTION leaves the fail-closed rls-statement breadcrumb (the one container consumed before the nets)', () => {
+    const m = model(`
+      create table public.t (id uuid);
+      create or replace function public.harden() returns void language plpgsql as $$
+        begin alter table public.t enable row level security; end $$;
+    `);
+    expect(m.proceduralRlsEnable).toBe(true);
+    expect(m.uninterpreted).toEqual([expect.objectContaining({ kind: 'rls-statement' })]);
+  });
+
+  it('a static ENABLE interleaved with an inline comment is attributed to its table, never misfiled as procedural', () => {
+    const m = model(`
+      create table public.a (id uuid);
+      create table public.b (id uuid);
+      alter table public.a
+        -- see security docs for why
+        enable row level security;
+    `);
+    expect(m.tables.get('a')?.rlsEnabled).toBe(true);
+    expect(m.tables.get('b')?.rlsEnabled).toBe(false);
+    expect(m.proceduralRlsEnable).toBe(false);
+  });
+
+  it('a comment-interleaved DISABLE is likewise attributed (was fail-open: the model kept claiming RLS on)', () => {
+    const m = model(`
+      create table public.a (id uuid);
+      alter table public.a enable row level security;
+      alter table public.a /* audit trail */ disable row level security;
+    `);
+    expect(m.tables.get('a')?.rlsEnabled).toBe(false);
+  });
+});
+
 describe('buildRlsModel — REVOKE final-state semantics (fail-secure)', () => {
   it('REVOKE ALL removes the granted role; a fully-revoked grant is dropped from the model', () => {
     const m = model(`

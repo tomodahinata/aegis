@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import { forEachDescendant, parseSource, rangeOf, ts } from './internal/ast';
 import { buildRlsModel, type RlsModel } from './internal/sql/model';
 import { isAuthenticatedOnlyGap } from './internal/sql/predicate';
+import { appliesOnlyToPrivilegedRoles } from './internal/sql/roles';
 import { docsUrlFor } from './rule';
 import type { Confidence, Finding } from './types';
 
@@ -36,9 +37,14 @@ interface WeakReason {
  */
 function weakTables(model: RlsModel): Map<string, WeakReason> {
   const weak = new Map<string, WeakReason>();
-  for (const table of model.tables.values()) {
-    if (!table.rlsEnabled) {
-      weak.set(table.name, { reason: 'has no Row Level Security', confidence: 'high' });
+  // A procedural (DO-block / dynamic EXECUTE) enable means no table can be PROVEN RLS-off — the same
+  // suppression `rls/table-without-rls` applies. Without this gate the correlator resurrected the exact
+  // CI-blocking false positive through this path, worse: at HIGH confidence with "confirmed" phrasing.
+  if (!model.proceduralRlsEnable) {
+    for (const table of model.tables.values()) {
+      if (!table.rlsEnabled) {
+        weak.set(table.name, { reason: 'has no Row Level Security', confidence: 'high' });
+      }
     }
   }
   for (const policy of model.policies) {
@@ -47,6 +53,9 @@ function weakTables(model: RlsModel): Map<string, WeakReason> {
     }
     if (policy.restrictive) {
       continue;
+    }
+    if (appliesOnlyToPrivilegedRoles(policy.roles)) {
+      continue; // unreachable by an anon/authenticated client (mirrors the skip in the rls/* rules)
     }
     if (
       (policy.usingTrue || policy.checkTrue) &&

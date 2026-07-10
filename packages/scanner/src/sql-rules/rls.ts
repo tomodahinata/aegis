@@ -8,6 +8,7 @@
 
 import { suggestOwnerScopedPolicy } from '../internal/sql/policy-suggestion';
 import { effectivePolicyClass, isAuthenticatedOnlyGap } from '../internal/sql/predicate';
+import { appliesOnlyToPrivilegedRoles } from '../internal/sql/roles';
 import { docsUrlFor } from '../rule';
 import type { SqlRule } from '../sql-rule';
 
@@ -28,6 +29,13 @@ export const tableWithoutRls: SqlRule = {
     docsUrl: docsUrlFor('rls/table-without-rls'),
   },
   check(ctx) {
+    // A DO block / dynamic `EXECUTE` enables RLS on tables this static model cannot name
+    // (`proceduralRlsEnable`); we then cannot prove any public table is unprotected, so we suppress rather
+    // than emit a CI-blocking false positive. Fail-secure toward the zero-false-positive wedge: a rare
+    // missed table beats breaking a build on RLS enabled through a loop we cannot statically attribute.
+    if (ctx.model.proceduralRlsEnable) {
+      return;
+    }
     for (const table of ctx.model.tables.values()) {
       if (!table.rlsEnabled) {
         ctx.report({
@@ -81,6 +89,9 @@ export const writePolicyWithoutCheck: SqlRule = {
       if (policy.restrictive) {
         continue; // RESTRICTIVE narrows access; absence of WITH CHECK is not a grant
       }
+      if (appliesOnlyToPrivilegedRoles(policy.roles)) {
+        continue; // an INSERT scoped to service_role/admin is trusted backend access, not an ownership gap
+      }
       // Only INSERT genuinely needs WITH CHECK: it has no USING clause to fall back on. For UPDATE and
       // ALL, PostgreSQL reuses the USING expression as the WITH CHECK when it is omitted, so those are
       // safe — flagging them is a false positive (this was a real bug found validating against SpoLove).
@@ -113,6 +124,9 @@ export const permissiveWritePolicy: SqlRule = {
       }
       if (policy.restrictive) {
         continue;
+      }
+      if (appliesOnlyToPrivilegedRoles(policy.roles)) {
+        continue; // `USING (true)` scoped to service_role/admin is trusted backend access (bypasses RLS)
       }
       if (isWrite(policy.command) && (policy.usingTrue || policy.checkTrue)) {
         ctx.report({
@@ -153,6 +167,9 @@ export const policyNotOwnerScoped: SqlRule = {
       }
       if (policy.restrictive) {
         continue; // RESTRICTIVE narrows access; it never grants it, so it is never the gap
+      }
+      if (appliesOnlyToPrivilegedRoles(policy.roles)) {
+        continue; // scoped only to service_role/admin — not "every authenticated user", so not the gap
       }
       if (!policy.tableHasOwnershipColumn) {
         continue; // no ownership column ⇒ likely intentionally shared/reference data (fail secure)
@@ -281,9 +298,12 @@ export const anonTableGrant: SqlRule = {
       }
       // Granting to anon WITH RLS enabled is the standard Supabase pattern (rows are scoped by policy),
       // so flag only a schema-wide grant, or a grant on a table that is NOT RLS-protected (a real leak).
+      // A procedural enable counts as protected — same suppression as `tableWithoutRls`; without it this
+      // rule kept firing on the exact DO-loop repos that gate was added for. The schema-wide `*` branch
+      // stays ungated: it is flagged regardless of RLS state by design.
       if (grant.table !== '*') {
         const table = ctx.model.tables.get(grant.table);
-        if (!table || table.rlsEnabled) {
+        if (!table || table.rlsEnabled || ctx.model.proceduralRlsEnable) {
           continue;
         }
       }

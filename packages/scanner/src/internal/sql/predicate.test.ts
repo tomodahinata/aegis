@@ -102,6 +102,15 @@ describe('classifyPredicate', () => {
     ['(select auth.uid()) is not null', 'authenticated-only'],
     ["(select auth.role()) = 'authenticated'", 'authenticated-only'],
     ['auth.jwt() is not null', 'authenticated-only'],
+    // REGRESSION (field-disclosed `selectWrap` gap): the `(select … AS <alias>)` performance wrapper the
+    // Supabase CLI emits must classify identically to the bare / plain-wrapped forms. Before `selectWrap`
+    // was unified with the alias tolerance, these fell through to `unknown` — hiding the owner-scope gap AND
+    // firing `rls/anon-writable` on authenticated-only and `service_role` policies (both false).
+    ['(select auth.uid() as uid) is not null', 'authenticated-only'],
+    ['(select auth.jwt() as jwt) is not null', 'authenticated-only'],
+    ["(select auth.role() as role) = 'authenticated'", 'authenticated-only'],
+    ["(select auth.role() as role) = 'service_role'", 'role-delegated'],
+    ["(select auth.jwt() as claims) ->> 'role' = 'admin'", 'role-delegated'],
     // role-delegated — membership subquery (suppressed)
     [
       'tenant_id in (select tenant_id from memberships where user_id = auth.uid())',
@@ -131,6 +140,27 @@ describe('classifyPredicate', () => {
     // fired on `WITH CHECK (auth.role() IN ('service_role', 'supabase_admin'))`).
     ["auth.role() in ('service_role', 'supabase_admin')", 'role-delegated'],
     ["auth.role() in ('admin', 'editor')", 'role-delegated'],
+    // role-delegated — the caller's identity PINNED to a specific hardcoded value (a single-admin gate). An
+    // anon (null uid / no sub) can never equal a concrete id, so it is neither the gap nor anon-satisfiable.
+    // Field: hardcoded-uuid admin gates were ~4% of `rls/anon-writable` false positives.
+    ["auth.uid() = '00000000-0000-0000-0000-000000000001'", 'role-delegated'],
+    ["auth.uid() = '00000000-0000-0000-0000-000000000001'::uuid", 'role-delegated'],
+    ["'00000000-0000-0000-0000-000000000001' = auth.uid()", 'role-delegated'],
+    ["(select auth.uid()) = 'a1b2c3d4-0000-0000-0000-000000000000'", 'role-delegated'],
+    ["auth.jwt() ->> 'sub' = 'a-specific-user-id'", 'role-delegated'],
+    ["auth.uid() = 'admin-uuid' and status = 'published'", 'role-delegated'],
+    // GUARD (must NOT be swept up by the identity pin): a pure row-state literal comparison stays `unknown`
+    // (it has no auth identity, an anon CAN satisfy it, so `rls/anon-writable` must still see it).
+    ["status = 'published'", 'unknown'],
+    ["visibility = 'public'", 'unknown'],
+    // GUARD: INEQUALITY against a hardcoded id is a blacklist check, not the identity pin —
+    // SPECIFIC_CALLER requires `=`. It must never silently widen to role-delegated (a future regex
+    // change from `=` to `[!<>]?=` would be caught here, not in the field).
+    ["auth.uid() != '00000000-0000-0000-0000-000000000001'", 'unknown'],
+    ["auth.uid() <> '00000000-0000-0000-0000-000000000001'", 'unknown'],
+    // CASE-INSENSITIVITY lock: masking runs BEFORE classifyPredicate lowercases, so the kept-literal
+    // patterns must carry the `i` flag — with plain `g` this uppercase form regressed to `unknown`.
+    ["AUTH.ROLE() = 'service_role'", 'role-delegated'],
     // authenticated-only — a disjunction that re-widens to EVERY authenticated user is still the gap, even
     // though one arm is a role gate (SESSION_PROOF is checked before the role/claim gate, COR/SEC ordering).
     ["auth.role() = 'service_role' or auth.uid() is not null", 'authenticated-only'],
@@ -167,11 +197,11 @@ describe('classifyPredicate', () => {
     ["note = 'see auth.role()'", 'unknown'],
     // COR-01 — the JWT/claim accessor literal still survives masking, so owner-bound is preserved
     ["auth.jwt() ->> 'sub' = user_id", 'owner-bound'],
-    // COR-02 — a bare numeric/literal on the column side is NOT an ownership comparison; it is also not a
-    // session proof, so it is suppressed as `unknown` (never silently treated as owner-bound — the genuine
-    // column comparison `auth.uid() = user_id` is pinned owner-bound above).
+    // COR-02 — a bare numeric on the column side is NOT an ownership comparison (nor a session proof), so it
+    // is never silently treated as owner-bound; a uuid = integer never occurs in a real policy, so it stays
+    // `unknown`. (A STRING literal — `auth.uid() = '<uuid>'` — is the real hardcoded-admin pin: `role-delegated`
+    // above, an anon can never satisfy it. Both remain out of owner-bound, so the flagship gap is unaffected.)
     ['auth.uid() = 1', 'unknown'],
-    ["auth.uid() = 'literal'", 'unknown'],
   ];
 
   for (const [expr, expected] of cases) {

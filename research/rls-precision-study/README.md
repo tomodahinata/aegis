@@ -53,14 +53,14 @@ schema helpers (`auth.is_admin()`, `auth.email()`, `auth.user_role()`, `auth.org
 (unrecognized `auth.*()` → `function-delegated`; `auth.role() IN (…)` → `role-delegated`), cutting
 `anon-writable` from **80 → 26** **with zero recall loss on the flagship rule** (235 → 235 on a same-sample
 re-scan). Both fixed classes are locked as regression fixtures. Of the 26 that still fire, **22 are genuinely
-anon-satisfiable row-state predicates** and **4 are residual false positives** across three shapes an anon
-cannot actually satisfy: `auth.uid() = '<hardcoded-uuid>'` (×2, documented and accepted) and — not yet
-suppressed — the `(select auth.uid() as uid) is not null` and `(select auth.jwt() ->> 'email') = email`
-wrapper forms, where the Supabase performance wrapper's `AS <alias>` defeats the session-proof / owner-bound
-match. That `selectWrap` alias gap is tracked as a follow-up fix (with its own regression fixtures);
-disclosing it keeps the precision figure honest rather than rounding it up.
+anon-satisfiable row-state predicates** and **4 were residual false positives** across three shapes an anon
+cannot actually satisfy: `auth.uid() = '<hardcoded-uuid>'` (×2) and the `(select auth.uid() as uid) is not
+null` / `(select auth.jwt() ->> 'email') = email` wrapper forms, where the Supabase performance wrapper's
+`AS <alias>` defeated the session-proof / owner-bound match. **Both classes are closed as of iteration 8
+below** (`SPECIFIC_CALLER` for the hardcoded-identity pin; a unified `selectWrap` with alias tolerance),
+with regression fixtures locked — 0 known residual false positives remain on the sibling rule as well.
 
-Seven verification iterations, each surfacing a real-world false-positive (or false-negative) class that the
+Eight verification iterations, each surfacing a real-world false-positive (or false-negative) class that the
 curated benchmark had missed:
 
 1. `service_role` / admin-claim gates, `::cast`, `as` aliases mistaken for the gap.
@@ -75,6 +75,15 @@ curated benchmark had missed:
 7. *(2026-07-01, from the 1,000-repo run)* `lower(col) = lower(auth.jwt() ->> 'email')` case-insensitive
    owner bindings (flagship rule); custom `auth.*()` helpers and `auth.role() IN (…)` list gates wrongly
    read as anon-satisfiable by the sibling `rls/anon-writable` rule (the ~68% FP class above).
+8. *(2026-07-10, from the 12,727-repo scan)* The `(select … AS <alias>)` wrapper forms of the session-proof
+   / role / claim gates (fell through to `unknown`, misfiring `rls/anon-writable`); hardcoded-identity pins
+   `auth.uid() = '<uuid>'` (now `role-delegated` via `SPECIFIC_CALLER`); policies scoped only to privileged
+   roles (`service_role`, …) skipped by the write/owner rules AND the RLS↔code correlator; `ALTER TABLE IF
+   EXISTS` honored by every ALTER handler (was: a false `table-without-rls` on ENABLE, fail-open on
+   DISABLE); procedural DO-block / dynamic-`EXECUTE` enables detected (`proceduralRlsEnable`) so
+   `table-without-rls` suppresses tables it cannot statically attribute — locked in
+   [`rls-alter-if-exists.sql`](../../packages/scanner/fixtures/sql/good/rls-alter-if-exists.sql) and
+   [`rls-precision-followups.sql`](../../packages/scanner/fixtures/sql/good/rls-precision-followups.sql).
 
 Every class above is now locked as a regression fixture:
 

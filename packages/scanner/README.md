@@ -20,7 +20,7 @@ const sarif = toSarif(result);
 
 ## The built-in rules
 
-`csp/unsafe-inline` · `csp/nonce-minted-unused` · `headers/missing-security-headers` · `ratelimit/missing-on-ai-route` · `env/public-secret` · `env/secret-in-client` · `supabase/service-role-outside-admin` · `csrf/missing-origin-check`.
+`csp/unsafe-inline` · `csp/nonce-minted-unused` · `headers/missing-security-headers` · `ratelimit/missing-on-ai-route` · `env/public-secret` · `env/secret-in-client` · `supabase/service-role-outside-admin` · `csrf/missing-origin-check` · plus the full `rls/*` SQL family (`rls/table-without-rls`, `rls/policy-not-owner-scoped`, `rls/anon-writable`, …) — see [`docs/coverage.md`](../../docs/coverage.md) for the complete, generated rule registry.
 
 Adding a rule is one file implementing the `Rule` interface.
 
