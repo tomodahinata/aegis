@@ -38,11 +38,11 @@ jobs:
       # Shared pnpm + Node 24 + frozen install (see .github/actions/setup).
       - uses: ./.github/actions/setup
 
-      # Trusted publishing needs npm CLI >= 11.5.1 for reliable OIDC auth; pin to latest regardless of the
-      # npm bundled with Node. `changeset publish` shells out to this npm to perform the actual publish.
-      - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
-
+      # OIDC trusted publishing needs npm >= 11.5.1 — which Node 24 already bundles (24.10 → 11.6, 24.18 →
+      # 11.16), so NO npm upgrade step is used. `npm install -g npm@latest` here is actively harmful: the
+      # in-place self-upgrade removes bundled deps (incl. `sigstore`), so the very next publish dies with
+      # "Cannot find module 'sigstore'" in provenance — and changeset's registry check misreads every
+      # package as unpublished. `changeset publish` uses this bundled npm to check the registry and publish.
       - name: Create the Version Packages PR, or publish when it merges
         id: changesets
         uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
