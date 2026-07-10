@@ -1,0 +1,39 @@
+name: Dependabot auto-merge
+
+# Hands-off dependency hygiene: once EVERY required status check on a Dependabot PR is green, minor and
+# patch bumps merge themselves (squash); majors are left for a human to review. This never checks out or
+# executes the PR's code — it only reads Dependabot's own metadata and asks GitHub to merge when the
+# branch-protection checks pass, so there is no untrusted-code execution surface. Auto-merge requires the
+# repo's "Allow auto-merge" setting plus a branch ruleset with required checks (both configured).
+on: pull_request
+
+# Least privilege by default; the one job that needs to merge elevates its own scopes below.
+permissions:
+  contents: read
+
+concurrency:
+  group: automerge-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependabot:
+    name: enable auto-merge (minor/patch)
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # merge the PR
+      pull-requests: write # enable auto-merge
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Read Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2
+      # Majors can carry breaking changes — a human decides. Minor/patch flow through once checks are green.
+      - name: Enable auto-merge for minor & patch updates
+        if: ${{ steps.meta.outputs.update-type == 'version-update:semver-patch' || steps.meta.outputs.update-type == 'version-update:semver-minor' }}
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
