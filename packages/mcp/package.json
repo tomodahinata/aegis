@@ -1,6 +1,6 @@
 {
   "name": "@aegiskit/mcp",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Aegis as a Model Context Protocol server — scan and explain Supabase RLS/authz gaps from inside Claude Code, Cursor, and other MCP agents.",
   "license": "MIT",
   "type": "module",
