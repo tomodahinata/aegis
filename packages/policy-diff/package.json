@@ -1,6 +1,6 @@
 {
   "name": "@aegiskit/policy-diff",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Semantic access diff for Supabase RLS migrations: turns two migration states into a plain-English access delta (who can newly read/write what), fail-safe by design — for PR review, CI gating, and change-management evidence.",
   "license": "MIT",
   "type": "module",

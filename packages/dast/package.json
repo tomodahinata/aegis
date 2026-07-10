@@ -1,6 +1,6 @@
 {
   "name": "@aegiskit/dast",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Dynamic application security testing for Aegis — confirms vulnerabilities against YOUR OWN running Next.js/Supabase app via bounded, non-destructive HTTP probes, and correlates them with static findings.",
   "license": "MIT",
   "type": "module",
