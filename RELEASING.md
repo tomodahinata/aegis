@@ -51,15 +51,29 @@ Each package is versioned independently. `apps/*` and `@aegiskit/demo` are priva
 bumped its version — so a brand-new package sitting at `0.0.0` will not appear on npm until its first
 changeset lands and its Version PR merges.
 
-## Prerequisites (already configured)
+## Publishing auth — npm Trusted Publishing (OIDC, tokenless)
 
-- **`NPM_TOKEN`** — a repo secret (an npm **granular/automation** token with publish rights to the
-  `@aegiskit` scope). It is written to `.npmrc` only at publish time and never committed.
-- **`id-token: write`** on the Release workflow — enables OIDC provenance (the repo is public, so
-  provenance is on).
-- **npm 2FA / access** — keep 2FA on the npm account; scope the token to publish-only and rotate it if
-  it is ever exposed. A longer-term hardening step is npm **Trusted Publishing** (tokenless OIDC), which
-  removes the long-lived `NPM_TOKEN` entirely.
+There is **no `NPM_TOKEN`**. The Release workflow authenticates to npm via **Trusted Publishing (OIDC)**:
+npm verifies the workflow's own identity (repository + workflow filename), so there is no long-lived
+token to leak, rotate, or expire. Provenance is generated automatically.
+
+What makes it work:
+
+- **`id-token: write`** on the Release workflow (the sole publish credential).
+- **npm CLI ≥ 11.5.1** — the workflow runs `npm install -g npm@latest` before publishing so OIDC auth is
+  reliable regardless of the npm bundled with Node.
+- **A Trusted Publisher on each `@aegiskit/*` package** (npmjs.com → the package → *Settings → Trusted
+  Publisher*), all pointing at the same identity:
+  - Organization or user: **`tomodahinata`**
+  - Repository: **`aegis`**
+  - Workflow filename: **`release.yml`** (filename only, not the full path)
+  - Environment: **(leave empty)**
+  - Allowed action: **npm publish**
+
+Adding a **new** package to the monorepo: npm can only configure a Trusted Publisher on a package that
+already exists, so a brand-new package needs one bootstrap publish before it can go tokenless — publish
+it once (locally with your npm login, or via a temporary token), then add its Trusted Publisher and it
+joins the OIDC flow like the rest.
 
 ## Rollback
 
