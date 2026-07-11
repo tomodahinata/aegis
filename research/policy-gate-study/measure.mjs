@@ -142,7 +142,7 @@ function classifyStep(prev, cur) {
   // RLS enablement transitions (disable is invisible to the current model — sized separately).
   for (const [name, ct] of cur.tables) {
     const pt = prev.tables.get(name);
-    if (pt && pt.rlsEnabled && !ct.rlsEnabled) flags.widening = true;
+    if (pt?.rlsEnabled && !ct.rlsEnabled) flags.widening = true;
     if (pt && !pt.rlsEnabled && ct.rlsEnabled) flags.narrowing = true;
   }
   if (cur.grants.length > prev.grants.length) flags.widening = true;
