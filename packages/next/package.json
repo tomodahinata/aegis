@@ -40,7 +40,7 @@
     "@types/node": "catalog:",
     "@types/react": "^19.0.0",
     "fast-check": "catalog:",
-    "next": "^16.2.9",
+    "next": "^16.2.10",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tsup": "catalog:",
