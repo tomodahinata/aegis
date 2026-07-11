@@ -5,7 +5,7 @@ packages:
   - 'apps/*'
 
 catalog:
-  '@types/node': ^26.0.1
+  '@types/node': ^26.1.1
   '@vitest/coverage-v8': ^4.1.9
   fast-check: ^4.8.0
   tsup: ^8.5.1
