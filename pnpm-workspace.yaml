@@ -9,7 +9,7 @@ catalog:
   '@vitest/coverage-v8': ^4.1.10
   fast-check: ^4.9.0
   tsup: ^8.5.1
-  tsx: ^4.23.0
+  tsx: ^4.23.1
   typescript: ^6.0.3
   vitest: ^4.1.10
   zod: ^4.4.3
