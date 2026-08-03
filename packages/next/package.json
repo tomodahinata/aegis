@@ -38,11 +38,11 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "@types/react": "^19.0.0",
+    "@types/react": "^19.2.18",
     "fast-check": "catalog:",
-    "next": "^16.2.10",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
+    "next": "^16.2.12",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
