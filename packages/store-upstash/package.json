@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "@upstash/redis": "^1.38.0",
+    "@upstash/redis": "^1.38.4",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
